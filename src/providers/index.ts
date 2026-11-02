@@ -2,25 +2,26 @@
 import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
-const terms: Record<Category,{met?:string;cleveland?:string}> = {
- 'Mimari':{met:'architecture',cleveland:'architecture'},
- 'Doğa ve manzara':{met:'landscape',cleveland:'landscape'},
- 'Klasik resim':{met:'painting',cleveland:'painting'},
- 'Empresyonizm':{met:'impressionism',cleveland:'impressionism'},
+const terms: Record<Category,{met?:string;cleveland?:string;rijks?:string}> = {
+ 'Mimari':{met:'architecture',cleveland:'architecture',rijks:'architecture'},
+ 'Doğa ve manzara':{met:'landscape',cleveland:'landscape',rijks:'landscape'},
+ 'Klasik resim':{met:'painting',cleveland:'painting',rijks:'painting'},
+ 'Empresyonizm':{met:'impressionism',cleveland:'impressionism',rijks:'impressionism'},
  'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy'},
- 'Modern sanat':{met:'modern art',cleveland:'modern art'},
- 'Şehirler':{met:'city',cleveland:'cityscape'},
- 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints'},
- 'Hayvanlar':{met:'animals',cleveland:'animals'},
- 'Fotoğrafçılık':{met:'photograph',cleveland:'photography'},
- 'Soyut sanat':{met:'abstract',cleveland:'abstract'},
- 'Tarih':{met:'historical',cleveland:'history'}
+ 'Modern sanat':{met:'modern art',cleveland:'modern art',rijks:'modern'},
+ 'Şehirler':{met:'city',cleveland:'cityscape',rijks:'city'},
+ 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints',rijks:'Japanese'},
+ 'Hayvanlar':{met:'animals',cleveland:'animals',rijks:'animals'},
+ 'Fotoğrafçılık':{met:'photograph',cleveland:'photography',rijks:'photograph'},
+ 'Soyut sanat':{met:'abstract',cleveland:'abstract',rijks:'abstract'},
+ 'Tarih':{met:'historical',cleveland:'history',rijks:'history'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
 // The Vite proxy is only available while running npm run dev.
 // Production/Tizen keeps the original public endpoints until a TV-safe solution is validated.
 const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
 const clevelandBase=import.meta.env.DEV?'/api/cleveland':'https://openaccess-api.clevelandart.org';
+const rijksBase=import.meta.env.DEV?'/api/rijks':'https://data.rijksmuseum.nl';
 class ApiError extends Error {
   constructor(readonly status:number,readonly endpoint:string){
     super(`HTTP ${status} (${endpoint})`);
@@ -79,9 +80,56 @@ const cleveland = async (category:Category, signal?:AbortSignal):Promise<Artwork
       width:Number(web.width)||undefined,height:Number(web.height)||undefined}];
   });
 };
+// Rijksmuseum's current search API returns Linked Art identifiers, not artwork records.
+// Resolve a small batch and discover its IIIF images from the Linked Art graph.
+const rijks = async (category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
+  const term=terms[category].rijks;if(!term)return [];
+  const params=new URLSearchParams({imageAvailable:'true',description:term});
+  const search=await fetchJson(`${rijksBase}/search/collection?${params}`,signal);
+  const ids:string[]=(search.orderedItems||[]).map((o:any)=>String(o.id||'').match(/\/(\d+)$/)?.[1]).filter(Boolean).slice(0,32);
+  const results:PromiseSettledResult<any>[]=[];
+  for(let i=0;i<ids.length;i+=4){
+    if(signal?.aborted)break;
+    results.push(...await Promise.allSettled(ids.slice(i,i+4).map(id=>fetchJson(`${rijksBase}/${id}?_profile=la-framed`,signal))));
+  }
+  const textValue=(v:any):string=>{
+    if(typeof v==='string')return v;
+    if(Array.isArray(v))return v.map(textValue).filter(Boolean).join(', ');
+    if(v&&typeof v==='object')return textValue(v.content||v.value||v._label||v.en||v.nl||'');
+    return '';
+  };
+  const items:Artwork[]=[];
+  for(let i=0;i<results.length;i++){
+    const result=results[i];if(result.status!=='fulfilled')continue;
+    const doc=result.value;
+    const nodes:any[]=[];const visited=new WeakSet<object>();
+    const walk=(v:any,depth:number)=>{
+      if(!v||typeof v!=='object'||depth>13||visited.has(v)||nodes.length>1500)return;
+      visited.add(v);nodes.push(v);
+      if(Array.isArray(v)){for(const child of v)walk(child,depth+1);}
+      else for(const child of Object.values(v))walk(child,depth+1);
+    };
+    walk(doc,0);
+    const imageUrls=nodes.flatMap(n=>{
+      if(typeof n!=='object'||Array.isArray(n))return [];
+      return [n.id,n['@id'],n.service?.id,n.access_point?.id].filter((v):v is string=>typeof v==='string'&&/^https:\/\/iiif\.micr\.io\/[A-Za-z0-9_-]+(?:\/info\.json)?$/.test(v));
+    });
+    const iiif=imageUrls[0]?.replace(/\/info\.json$/,'');
+    if(!iiif)continue;
+    const root=doc?.['@graph']?.find?.((n:any)=>n.id===`https://id.rijksmuseum.nl/${ids[i]}`)||doc;
+    const title=textValue(root?._label||root?.identified_by?.find?.((n:any)=>n.type==='Name')?.content)||'Rijksmuseum eseri';
+    const artist=textValue(root?.produced_by?.carried_out_by?.[0]?._label)||undefined;
+    items.push({id:`rijks:${ids[i]}`,source:'rijks',title,artist,category,
+      imageUrl:`${iiif}/full/1600,/0/default.jpg`,
+      thumbnailUrl:`${iiif}/full/480,/0/default.jpg`,
+      license:'Rijksmuseum – kullanım koşullarını doğrulayın',
+      sourceUrl:`https://id.rijksmuseum.nl/${ids[i]}`});
+  }
+  return items;
+};
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
-    const active:Source[]=(['met','cleveland'] as Source[]).filter(s=>supported(s,category));
+    const active:Source[]=(['met','cleveland','rijks'] as Source[]).filter(s=>supported(s,category));
     const results=await Promise.allSettled(active.map(s=>loadArtworks(s,category,signal)));
     if(signal?.aborted) return [];
     const successful=results.filter((r):r is PromiseFulfilledResult<Artwork[]>=>r.status==='fulfilled');
@@ -94,5 +142,6 @@ export const loadArtworks = async (source:SourceSelection,category:Category,sign
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
   if(source==='cleveland') return cleveland(category,signal);
-  return cleveland(category,signal);
+  if(source==='cleveland')return cleveland(category,signal);
+  return rijks(category,signal);
 };
