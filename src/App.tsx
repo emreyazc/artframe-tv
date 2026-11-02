@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle,X} from 'lucide-react';
-import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source} from './types';
+import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
 import {loadArtworks,supported} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','chicago','commons'];
@@ -8,7 +8,7 @@ const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
 export default function App(){
  const [prefs,setPrefs]=useState<Preferences>(()=>read('artframe:prefs',defaults));
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
- const [source,setSource]=useState<Source>('met');
+ const [source,setSource]=useState<SourceSelection>('all');
  const [category,setCategory]=useState<Category>('Klasik resim');
  const [artworks,setArtworks]=useState<Artwork[]>([]);
  const [loading,setLoading]=useState(false);
@@ -22,11 +22,11 @@ export default function App(){
  const selected=artworks[index];
  useEffect(()=>{localStorage.setItem('artframe:prefs',JSON.stringify(prefs));},[prefs]);
  useEffect(()=>{localStorage.setItem('artframe:favorites',JSON.stringify(favorites));},[favorites]);
- const availableCategories=useMemo(()=>prefs.categories.filter(c=>supported(source,c)),[prefs.categories,source]);
- useEffect(()=>{if(!prefs.sources.includes(source))setSource(prefs.sources[0]||'met');},[prefs.sources,source]);
+ const availableCategories=useMemo(()=>prefs.categories,[prefs.categories]);
+ useEffect(()=>{if(source!=='all'&&!prefs.sources.includes(source))setSource('all');},[prefs.sources,source]);
  useEffect(()=>{if(!availableCategories.includes(category)&&availableCategories.length)setCategory(availableCategories[0]);},[availableCategories,category]);
  const refresh=useCallback(async()=>{
-  if(!supported(source,category))return;
+  if(source!=='all'&&!supported(source,category)){setArtworks([]);setError('Bu kategoride seçilen kaynakta eser bulunmuyor. Tüm kaynaklar seçeneğini deneyin.');return;}
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
   setLoading(true);setError('');setArtworks([]);setIndex(0);
   try{const data=await loadArtworks(source,category,controller.signal);if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(data):data);}
@@ -64,7 +64,7 @@ export default function App(){
   {view==='gallery'&&<>
    <header className="topbar"><div className="brand"><span className="brand-icon"><Image size={22}/></span><div><strong>ArtFrame <span>TV</span></strong><small>Sanatın ekranında hayat bulsun.</small></div></div><button className="icon-btn" onClick={()=>setView('settings')} aria-label="Ayarlar"><Settings/></button></header>
    <section className="intro"><div><p className="eyebrow">ÜCRETSİZ SANAT KOLEKSİYONLARI</p><h1>Bir ekran.<br/><em>Binlerce hikâye.</em></h1><p>Kaynağını ve koleksiyonunu seç, sanat eserlerini televizyonunda keşfet.</p></div><div className="intro-art" aria-hidden="true"><span>ART<br/>FRAME</span></div></section>
-   <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as Source)}>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
+   <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
    <div className="section-heading"><div><h2>{category}</h2><p>{sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
    {!loading&&!error&&!artworks.length&&<div className="message">Bu seçim için gösterilebilecek eser bulunamadı. Başka bir kategori deneyin.</div>}
