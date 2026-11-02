@@ -16,6 +16,10 @@ const terms: Record<Category,{met?:string;chicago?:string;commons?:string}> = {
  'Tarih':{met:'historical',chicago:'history',commons:'historic monuments'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
+// The Vite proxy is only available while running npm run dev.
+// Production/Tizen keeps the original public endpoints until a TV-safe solution is validated.
+const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
+const chicagoBase=import.meta.env.DEV?'/api/chicago':'https://api.artic.edu';
 const fetchJson = async (url:string, signal?:AbortSignal) => {
   const response = await fetch(url,{signal,headers:{Accept:'application/json'}});
   if(!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -24,9 +28,9 @@ const fetchJson = async (url:string, signal?:AbortSignal) => {
 const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
   const term=terms[category].met; if(!term) return [];
   // The Met's public Collection API; keep the adapter isolated for future API changes.
-  const search=await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1.1/search?hasImages=true&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
+  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?hasImages=true&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
   const ids:number[]=(search.objectIDs||[]).slice(0,100);
-  const objects=await Promise.allSettled(ids.map(id=>fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,signal)));
+  const objects=await Promise.allSettled(ids.map(id=>fetchJson(`${metBase}/public/collection/v1/objects/${id}`,signal)));
   return objects.flatMap((result):Artwork[]=>{
     if(result.status!=='fulfilled') return [];
     const o=result.value;
@@ -39,7 +43,7 @@ const chicago = async (category:Category, signal?:AbortSignal):Promise<Artwork[]
   const params=new URLSearchParams({q:term,limit:'100',fields:'id,title,artist_display,date_display,image_id,is_public_domain,api_link,dimensions','query[term][is_public_domain]':'true'});
   // Public-domain filtering is also enforced locally.
   let json:any;
- try{json=await fetchJson(`https://api.artic.edu/api/v1/artworks/search?${params.toString()}`,signal);}
+ try{json=await fetchJson(`${chicagoBase}/api/v1/artworks/search?${params.toString()}`,signal);}
  catch(e){if(signal?.aborted)throw e;throw new Error('Art Institute of Chicago servisine erişilemiyor (ağ/CORS veya servis hatası)');}
   const base=(json.config?.iiif_url as string)||'https://www.artic.edu/iiif/2';
   return (json.data||[]).filter((o:any)=>o.is_public_domain&&o.image_id).map((o:any):Artwork=>({id:`chicago:${o.id}`,source:'chicago',title:o.title||'İsimsiz eser',artist:o.artist_display||undefined,year:o.date_display||undefined,category,imageUrl:`${base}/${o.image_id}/full/1680,/0/default.jpg`,thumbnailUrl:`${base}/${o.image_id}/full/480,/0/default.jpg`,license:'CC0 / Public Domain',sourceUrl:`https://www.artic.edu/artworks/${o.id}`}));
