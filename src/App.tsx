@@ -5,8 +5,30 @@ import {loadArtworks,supported} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','chicago','commons'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
-const wideScore=(a:Artwork)=>{if(!a.width||!a.height)return -1;const ratio=a.width/a.height;return ratio>=1.3?Math.max(0,1-Math.abs(ratio-16/9)):0;};
-const preferWide=(items:Artwork[])=>[...items].sort((a,b)=>wideScore(b)-wideScore(a));
+// Accept only images close to the TV's 16:9 aspect ratio (roughly 1.6–2.0).
+const isWide=(width:number,height:number)=>width>0&&height>0&&width/height>=1.6&&width/height<=2;
+const measureImage=(url:string,signal:AbortSignal):Promise<{width:number;height:number}|null>=>new Promise(resolve=>{
+ if(signal.aborted){resolve(null);return;}
+ const img=new window.Image();let done=false;
+ const finish=(size:{width:number;height:number}|null)=>{if(done)return;done=true;clearTimeout(timeout);signal.removeEventListener('abort',cancel);img.onload=null;img.onerror=null;img.src='';resolve(size);};
+ const cancel=()=>finish(null);
+ const timeout=window.setTimeout(()=>finish(null),8000);
+ signal.addEventListener('abort',cancel,{once:true});
+ img.onload=()=>finish({width:img.naturalWidth,height:img.naturalHeight});
+ img.onerror=()=>finish(null);
+ img.src=url;
+});
+const filterWide=async(items:Artwork[],signal:AbortSignal):Promise<Artwork[]>=>{
+ const result:(Artwork|null)[]=new Array(items.length).fill(null);
+ let cursor=0;
+ const worker=async()=>{while(cursor<items.length&&!signal.aborted){
+  const at=cursor++;const art=items[at];
+  const dimensions=art.width&&art.height?{width:art.width,height:art.height}:await measureImage(art.thumbnailUrl,signal);
+  if(dimensions&&isWide(dimensions.width,dimensions.height))result[at]=art;
+ }};
+ await Promise.all(Array.from({length:Math.min(6,items.length)},()=>worker()));
+ return result.filter((a):a is Artwork=>a!==null);
+};
 export default function App(){
  const [prefs,setPrefs]=useState<Preferences>(()=>read('artframe:prefs',defaults));
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
@@ -31,7 +53,7 @@ export default function App(){
   if(source!=='all'&&!supported(source,category)){setArtworks([]);setError('Bu kategoride seçilen kaynakta eser bulunmuyor. Tüm kaynaklar seçeneğini deneyin.');return;}
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
   setLoading(true);setError('');setArtworks([]);setIndex(0);
-  try{const data=await loadArtworks(source,category,controller.signal);if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(data):prefs.preferWide?preferWide(data):data);}
+  try{const data=await loadArtworks(source,category,controller.signal);const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);}
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
  },[source,category,prefs.shuffle,prefs.preferWide]);
@@ -69,18 +91,18 @@ export default function App(){
    <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
    <div className="section-heading"><div><h2>{category}</h2><p>{sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
-   {!loading&&!error&&!artworks.length&&<div className="message">Bu seçim için gösterilebilecek eser bulunamadı. Başka bir kategori deneyin.</div>}
-   {loading&&<div className="message">Koleksiyon yükleniyor. The Met eserlerinin detayları nedeniyle ilk yükleme biraz sürebilir…</div>}
+   {!loading&&!error&&!artworks.length&&<div className="message">Bu seçimde 16:9 ekrana uygun eser bulunamadı. Başka bir kategori veya kaynak deneyin.</div>}
+   {loading&&<div className="message">Koleksiyon yükleniyor ve görsellerin ekran oranları kontrol ediliyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
   {view==='player'&&selected&&<div className="player" onMouseMove={()=>setShowOverlay(true)}>
-   {prefs.fit==='frame'&&<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img className={`full-art ${prefs.fit}`} src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
+   {prefs.fit==='frame'&&!(prefs.preferWide??true)&&<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
+   <img className={`full-art ${(prefs.preferWide??true)?'cover':prefs.fit}`} src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
    <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<><h2>{selected.title}</h2><p>{selected.artist||sourceNames[selected.source]} {selected.year?`· ${selected.year}`:''}</p><small>{selected.license} · <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Kaynak sayfası</a></small></>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
    <button className="overlay-toggle" onClick={()=>setShowOverlay(v=>!v)} aria-label="Bilgileri gizle/göster"/>
   </div>}
-  {view==='settings'&&<div className="settings-page"><header className="topbar"><button className="back-btn" onClick={back}><ArrowLeft size={19}/> Galeriye dön</button><h2>Ayarlar</h2></header><div className="settings-content"><h1>ArtFrame ayarları</h1><p className="muted">Tercihler bu cihazın yerel depolamasına kaydedilir.</p><h3>Görsel kaynakları</h3><div className="checks">{allSources.map(s=><label key={s}><input type="checkbox" checked={prefs.sources.includes(s)} disabled={prefs.sources.length===1&&prefs.sources.includes(s)} onChange={e=>changePrefs({sources:e.target.checked?[...prefs.sources,s]:prefs.sources.filter(v=>v!==s)})}/>{sourceNames[s]}</label>)}</div><h3>Kategoriler</h3><div className="checks two">{categories.map(c=><label key={c}><input type="checkbox" checked={prefs.categories.includes(c)} disabled={prefs.categories.length===1&&prefs.categories.includes(c)} onChange={e=>changePrefs({categories:e.target.checked?[...prefs.categories,c]:prefs.categories.filter(v=>v!==c)})}/>{c}</label>)}</div><h3>Sanat modu</h3><div className="setting-row"><label htmlFor="interval">Görsel değiştirme süresi</label><select id="interval" value={prefs.interval} onChange={e=>changePrefs({interval:Number(e.target.value)})}>{[30,60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n<60?`${n} saniye`:`${n/60} dakika`}</option>)}</select></div><div className="setting-row"><label htmlFor="fit">Görüntü yerleşimi</label><select id="fit" value={prefs.fit} onChange={e=>changePrefs({fit:e.target.value as Preferences['fit']})}><option value="contain">Tamamını göster</option><option value="cover">Ekranı doldur (kırpabilir)</option><option value="frame">Sanat çerçevesi (bulanık arka plan)</option></select></div><div className="checks"><label><input type="checkbox" checked={prefs.preferWide??true} onChange={e=>changePrefs({preferWide:e.target.checked})}/>16:9 yatay görselleri önceliklendir</label><label><input type="checkbox" checked={prefs.showInfo} onChange={e=>changePrefs({showInfo:e.target.checked})}/>Eser bilgilerini göster</label><label><input type="checkbox" checked={prefs.shuffle} onChange={e=>changePrefs({shuffle:e.target.checked})}/><Shuffle size={15}/> Karışık sıralama</label></div><p className="note">TV genelinde otomatik ekran koruyucu başlatma henüz uygulanmadı. Bu özellik için Tizen sistem yetkileri ayrıca araştırılacak.</p></div></div>}
+  {view==='settings'&&<div className="settings-page"><header className="topbar"><button className="back-btn" onClick={back}><ArrowLeft size={19}/> Galeriye dön</button><h2>Ayarlar</h2></header><div className="settings-content"><h1>ArtFrame ayarları</h1><p className="muted">Tercihler bu cihazın yerel depolamasına kaydedilir.</p><h3>Görsel kaynakları</h3><div className="checks">{allSources.map(s=><label key={s}><input type="checkbox" checked={prefs.sources.includes(s)} disabled={prefs.sources.length===1&&prefs.sources.includes(s)} onChange={e=>changePrefs({sources:e.target.checked?[...prefs.sources,s]:prefs.sources.filter(v=>v!==s)})}/>{sourceNames[s]}</label>)}</div><h3>Kategoriler</h3><div className="checks two">{categories.map(c=><label key={c}><input type="checkbox" checked={prefs.categories.includes(c)} disabled={prefs.categories.length===1&&prefs.categories.includes(c)} onChange={e=>changePrefs({categories:e.target.checked?[...prefs.categories,c]:prefs.categories.filter(v=>v!==c)})}/>{c}</label>)}</div><h3>Sanat modu</h3><div className="setting-row"><label htmlFor="interval">Görsel değiştirme süresi</label><select id="interval" value={prefs.interval} onChange={e=>changePrefs({interval:Number(e.target.value)})}>{[30,60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n<60?`${n} saniye`:`${n/60} dakika`}</option>)}</select></div><div className="setting-row"><label htmlFor="fit">Görüntü yerleşimi</label><select id="fit" value={prefs.fit} onChange={e=>changePrefs({fit:e.target.value as Preferences['fit']})}><option value="contain">Tamamını göster</option><option value="cover">Ekranı doldur (kırpabilir)</option><option value="frame">Sanat çerçevesi (bulanık arka plan)</option></select></div><div className="checks"><label><input type="checkbox" checked={prefs.preferWide??true} onChange={e=>changePrefs({preferWide:e.target.checked})}/>Yalnızca 16:9'a yakın yatay görselleri göster</label><label><input type="checkbox" checked={prefs.showInfo} onChange={e=>changePrefs({showInfo:e.target.checked})}/>Eser bilgilerini göster</label><label><input type="checkbox" checked={prefs.shuffle} onChange={e=>changePrefs({shuffle:e.target.checked})}/><Shuffle size={15}/> Karışık sıralama</label></div><p className="note">TV genelinde otomatik ekran koruyucu başlatma henüz uygulanmadı. Bu özellik için Tizen sistem yetkileri ayrıca araştırılacak.</p></div></div>}
  </main>;
 }
