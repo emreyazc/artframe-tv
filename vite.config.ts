@@ -12,6 +12,12 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/api\/met/, ''),
       },
+      '/api/rijks': {
+        target: 'https://data.rijksmuseum.nl',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/rijks/, ''),
+      },
       '/api/cleveland': {
         target: 'https://openaccess-api.clevelandart.org',
         changeOrigin: true,
