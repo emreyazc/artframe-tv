@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle} from 'lucide-react';
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
-import {featuredArtists,loadArtworks,loadArtistArtworks} from './providers';
+import {featuredArtists,loadArtworks,loadArtistArtworks,resolveArtworkImage} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','cleveland','rijks','openverse','nasa'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
@@ -20,10 +20,27 @@ export default function App(){
  const [index,setIndex]=useState(0);
  const [playing,setPlaying]=useState(true);
  const [showOverlay,setShowOverlay]=useState(true);
+ const [slideUrl,setSlideUrl]=useState('');
+ const [slideLoading,setSlideLoading]=useState(false);
 
  const gridRef=useRef<HTMLDivElement>(null);
  const abort=useRef<AbortController|null>(null);
  const selected=artworks[index];
+ useEffect(()=>{
+  if(view!=='player'||!selected)return;
+  const controller=new AbortController();let alive=true;
+  setSlideUrl(selected.thumbnailUrl);setSlideLoading(true);
+  (async()=>{
+   try{
+    const url=await resolveArtworkImage(selected,controller.signal);
+    const img=new window.Image();
+    img.onload=()=>{if(alive){setSlideUrl(url);setSlideLoading(false);}};
+    img.onerror=()=>{if(alive)setSlideLoading(false);};
+    img.src=url;
+   }catch{if(alive)setSlideLoading(false);}
+  })();
+  return()=>{alive=false;controller.abort();};
+ },[view,selected]);
  useEffect(()=>{localStorage.setItem('artframe:prefs',JSON.stringify(prefs));},[prefs]);
  useEffect(()=>{localStorage.setItem('artframe:favorites',JSON.stringify(favorites));},[favorites]);
  const availableCategories=useMemo(()=>prefs.categories,[prefs.categories]);
@@ -95,7 +112,7 @@ export default function App(){
   </>}
   {view==='player'&&selected&&<div className="player" onMouseMove={()=>{if(!showOverlay)setShowOverlay(true);}} onClick={e=>{if(e.target===e.currentTarget)setShowOverlay(true);}}>
    {<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img key={selected.id} className="full-art frame" src={selected.imageUrl} alt={selected.title} onError={e=>{const el=e.currentTarget;if(el.dataset.fallback!=='1'&&selected.thumbnailUrl!==selected.imageUrl){el.dataset.fallback='1';el.src=selected.thumbnailUrl;}}}/>
+   <img key={selected.id} className="full-art frame" src={slideUrl||selected.thumbnailUrl} alt={selected.title}/>{slideLoading&&<div className="slide-loading" aria-live="polite">Yüksek çözünürlüklü görsel yükleniyor…</div>}
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
    <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<div className="art-meta-line"><strong title={selected.title}>{selected.title}</strong><span className="meta-dot">·</span><span title={selected.artist||sourceNames[selected.source]}>{selected.artist||sourceNames[selected.source]}</span>{selected.year&&<><span className="meta-dot">·</span><span>{selected.year}</span></>}</div>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
 
