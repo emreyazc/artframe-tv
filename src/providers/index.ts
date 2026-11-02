@@ -37,7 +37,7 @@ const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.or
 const clevelandBase=import.meta.env.DEV?'/api/cleveland':'https://openaccess-api.clevelandart.org';
 const rijksBase=import.meta.env.DEV?'/api/rijks':'https://data.rijksmuseum.nl';
 // Openverse anonymous requests may be blocked when routed through a server/proxy IP.
-const openverseBase='https://api.openverse.org';
+const openverseBase=import.meta.env.DEV?'/api/openverse':'https://api.openverse.org';
 const nasaBase=import.meta.env.DEV?'/api/nasa':'https://images-api.nasa.gov';
 class ApiError extends Error {
   constructor(readonly status:number,readonly endpoint:string){
@@ -66,12 +66,12 @@ const met = async (category:Category, signal?:AbortSignal, artist?:string):Promi
  const params=new URLSearchParams({hasImages:'true',q:term,offset:'0',limit:artist?'320':'100'});
  if(artist)params.set('artistOrCulture','true');
  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?${params}`,signal);
- const ids:number[]=(search.objectIDs||[]).slice(0,artist?320:100);
+ const ids:number[]=(search.objectIDs||[]).slice(0,artist?120:48);
  const found:Artwork[]=[];
  // Artist searches can include unrelated objects. Scan several batches, with bounded concurrency.
- for(let offset=0;offset<ids.length;offset+=8){
+ for(let offset=0;offset<ids.length;offset+=2){
   if(signal?.aborted)break;
-  const batch=await Promise.allSettled(ids.slice(offset,offset+8).map(id=>fetchJson(`${metBase}/public/collection/v1/objects/${id}`,signal)));
+  const batch=await Promise.allSettled(ids.slice(offset,offset+2).map(id=>fetchJson(`${metBase}/public/collection/v1/objects/${id}`,signal)));
   for(const result of batch){
    if(result.status!=='fulfilled')continue;
    const o=result.value;
@@ -81,7 +81,8 @@ const met = async (category:Category, signal?:AbortSignal, artist?:string):Promi
     license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,
     width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined});
   }
-  if(artist&&found.length>=90)break;
+  if(artist&&found.length>=48)break;
+  if(offset+2<ids.length)await pause(350,signal);
  }
  return found;
 };
