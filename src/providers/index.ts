@@ -61,40 +61,50 @@ const fetchJson = async (url:string, signal?:AbortSignal) => {
   }
 };
 const met = async (category:Category, signal?:AbortSignal, artist?:string):Promise<Artwork[]> => {
-  const term=artist||terms[category].met; if(!term) return [];
-  // The Met's public Collection API; keep the adapter isolated for future API changes.
-  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?hasImages=true${artist?'&artistOrCulture=true':''}&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
-  const ids:number[]=(search.objectIDs||[]).slice(0,100);
-  const objects:PromiseSettledResult<any>[]=[];
-  // Avoid flooding the museum endpoint with 100 concurrent requests.
-  for(let offset=0;offset<ids.length;offset+=8){
-    if(signal?.aborted)break;
-    const batch=await Promise.allSettled(ids.slice(offset,offset+8).map(id=>fetchJson(`${metBase}/public/collection/v1/objects/${id}`,signal)));
-    objects.push(...batch);
+ const term=artist||terms[category].met;if(!term)return [];
+ const params=new URLSearchParams({hasImages:'true',q:term});
+ if(artist)params.set('artistOrCulture','true');
+ const search=await fetchJson(`${metBase}/public/collection/v1/search?${params}`,signal);
+ const ids:number[]=(search.objectIDs||[]).slice(0,artist?320:100);
+ const found:Artwork[]=[];
+ // Artist searches can include unrelated objects. Scan several batches, with bounded concurrency.
+ for(let offset=0;offset<ids.length;offset+=8){
+  if(signal?.aborted)break;
+  const batch=await Promise.allSettled(ids.slice(offset,offset+8).map(id=>fetchJson(`${metBase}/public/collection/v1/objects/${id}`,signal)));
+  for(const result of batch){
+   if(result.status!=='fulfilled')continue;
+   const o=result.value;
+   if(!o.isPublicDomain||!o.primaryImageSmall||!o.primaryImage||(artist&&!matchesArtist(o.artistDisplayName,artist)))continue;
+   found.push({id:`met:${o.objectID}`,source:'met',title:o.title||'İsimsiz eser',artist:o.artistDisplayName||undefined,
+    year:o.objectDate||undefined,category,imageUrl:o.primaryImage,thumbnailUrl:o.primaryImageSmall,
+    license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,
+    width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined});
   }
-  return objects.flatMap((result):Artwork[]=>{
-    if(result.status!=='fulfilled') return [];
-    const o=result.value;
-    if(!o.isPublicDomain||!o.primaryImageSmall||!o.primaryImage||(artist&&!matchesArtist(o.artistDisplayName,artist))) return [];
-    return [{id:`met:${o.objectID}`,source:'met',title:o.title||'İsimsiz eser',artist:o.artistDisplayName||undefined,year:o.objectDate||undefined,category,imageUrl:o.primaryImage,thumbnailUrl:o.primaryImageSmall,license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined}];
-  });
+  if(artist&&found.length>=90)break;
+ }
+ return found;
 };
 const cleveland = async (category:Category, signal?:AbortSignal, artist?:string):Promise<Artwork[]> => {
-  const term=artist||terms[category].cleveland;if(!term)return [];
-  const params=new URLSearchParams({q:term,has_image:'1',limit:'100',skip:'0'});
-  // Cleveland's CC0 status is checked per artwork; copyrighted images are excluded.
+ const term=artist||terms[category].cleveland;if(!term)return [];
+ const found:Artwork[]=[];
+ for(let skip=0;skip<(artist?400:100);skip+=100){
+  if(signal?.aborted)break;
+  const params=new URLSearchParams({q:term,has_image:'1',limit:'100',skip:String(skip)});
   const json=await fetchJson(`${clevelandBase}/api/artworks/?${params}`,signal);
-  return (json.data||[]).flatMap((o:any):Artwork[]=>{
-    if(String(o.share_license_status).toUpperCase()!=='CC0'||!o.images?.web?.url||(artist&&!matchesArtist((o.creators||[]).map((c:any)=>c.description||c.name).join(' '),artist)))return [];
-    const web=o.images.web;
-    const print=o.images.print;
-    return [{id:`cleveland:${o.id}`,source:'cleveland',title:o.title||'İsimsiz eser',
-      artist:o.creators?.map((c:any)=>c.description||c.name).filter(Boolean).join(', ')||undefined,
-      year:o.creation_date||undefined,category,
-      imageUrl:print?.url||web.url,thumbnailUrl:web.url,license:'CC0 / Public Domain',
-      sourceUrl:o.url||`https://www.clevelandart.org/art/${o.accession_number||o.id}`,
-      width:Number(web.width)||undefined,height:Number(web.height)||undefined}];
-  });
+  const rows:any[]=json.data||[];
+  for(const o of rows){
+   if(String(o.share_license_status).toUpperCase()!=='CC0'||!o.images?.web?.url||
+    (artist&&!matchesArtist((o.creators||[]).map((c:any)=>c.description||c.name).join(' '),artist)))continue;
+   const web=o.images.web;const print=o.images.print;
+   found.push({id:`cleveland:${o.id}`,source:'cleveland',title:o.title||'İsimsiz eser',
+    artist:o.creators?.map((c:any)=>c.description||c.name).filter(Boolean).join(', ')||undefined,
+    year:o.creation_date||undefined,category,imageUrl:print?.url||web.url,thumbnailUrl:web.url,
+    license:'CC0 / Public Domain',sourceUrl:o.url||`https://www.clevelandart.org/art/${o.accession_number||o.id}`,
+    width:Number(web.width)||undefined,height:Number(web.height)||undefined});
+  }
+  if(rows.length<100||found.length>=90)break;
+ }
+ return found;
 };
 // Rijksmuseum's current search API returns Linked Art identifiers, not artwork records.
 // Resolve a small batch and discover its IIIF images from the Linked Art graph.
