@@ -2,19 +2,19 @@
 import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
-const terms: Record<Category,{met?:string;cleveland?:string;commons?:string}> = {
- 'Mimari':{met:'architecture',cleveland:'architecture',commons:'architecture buildings'},
- 'Doğa ve manzara':{met:'landscape',cleveland:'landscape',commons:'landscape nature'},
- 'Klasik resim':{met:'painting',cleveland:'painting',commons:'classical painting'},
- 'Empresyonizm':{met:'impressionism',cleveland:'impressionism',commons:'impressionist painting'},
- 'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy',commons:'astronomy nebula'},
- 'Modern sanat':{met:'modern art',cleveland:'modern art',commons:'modern art'},
- 'Şehirler':{met:'city',cleveland:'cityscape',commons:'city skyline'},
- 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints',commons:'Japanese art'},
- 'Hayvanlar':{met:'animals',cleveland:'animals',commons:'wildlife animals'},
- 'Fotoğrafçılık':{met:'photograph',cleveland:'photography',commons:'photography'},
- 'Soyut sanat':{met:'abstract',cleveland:'abstract',commons:'abstract art'},
- 'Tarih':{met:'historical',cleveland:'history',commons:'historic monuments'}
+const terms: Record<Category,{met?:string;cleveland?:string}> = {
+ 'Mimari':{met:'architecture',cleveland:'architecture'},
+ 'Doğa ve manzara':{met:'landscape',cleveland:'landscape'},
+ 'Klasik resim':{met:'painting',cleveland:'painting'},
+ 'Empresyonizm':{met:'impressionism',cleveland:'impressionism'},
+ 'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy'},
+ 'Modern sanat':{met:'modern art',cleveland:'modern art'},
+ 'Şehirler':{met:'city',cleveland:'cityscape'},
+ 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints'},
+ 'Hayvanlar':{met:'animals',cleveland:'animals'},
+ 'Fotoğrafçılık':{met:'photograph',cleveland:'photography'},
+ 'Soyut sanat':{met:'abstract',cleveland:'abstract'},
+ 'Tarih':{met:'historical',cleveland:'history'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
 // The Vite proxy is only available while running npm run dev.
@@ -79,32 +79,9 @@ const cleveland = async (category:Category, signal?:AbortSignal):Promise<Artwork
       width:Number(web.width)||undefined,height:Number(web.height)||undefined}];
   });
 };
-const commons = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
-  const term=terms[category].commons; if(!term) return [];
-  const params=new URLSearchParams({action:'query',generator:'search',gsrsearch:`filetype:bitmap ${term}`,gsrnamespace:'6',gsrlimit:'50',prop:'imageinfo',iiprop:'url|size|extmetadata',iiurlwidth:'480',format:'json',origin:'*'});
-  const pages:any[]=[];
-  for(let page=0;page<4;page++){
-    const json=await fetchJson(`https://commons.wikimedia.org/w/api.php?${params}`,signal);
-    pages.push(...Object.values(json.query?.pages||{}));
-    const next=json.continue?.gsroffset;
-    if(next===undefined||signal?.aborted)break;
-    params.set('gsroffset',String(next));
-  }
-  const allowed=/public domain|cc0|cc by|cc-by|creative commons attribution/i;
-  const clean=(html:string)=>html.replace(/<[^>]*>/g,' ').replace(/&[^;]+;/g,' ').trim();
-  return pages.flatMap((p):Artwork[]=>{
-    const i=p.imageinfo?.[0]; if(!i?.url||!i?.thumburl) return [];
-    const meta=i.extmetadata||{};
-    const license=clean(meta.LicenseShortName?.value||meta.UsageTerms?.value||'');
-    if(!allowed.test(license)) return [];
-    const mime=String(i.mime||''); if(mime&&!mime.startsWith('image/')) return [];
-    const title=String(p.title||'').replace(/^File:/,'').replace(/\.[^.]+$/,'').replace(/_/g,' ');
-    return [{id:`commons:${p.pageid}`,source:'commons',title,artist:clean(meta.Artist?.value||'')||undefined,category,imageUrl:i.url,thumbnailUrl:i.thumburl,license,attribution:clean(meta.Attribution?.value||'')||undefined,sourceUrl:i.descriptionurl||`https://commons.wikimedia.org/wiki/${encodeURIComponent(p.title)}`,width:Number(i.width)||undefined,height:Number(i.height)||undefined}];
-  });
-};
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
-    const active:Source[]=(['met','cleveland','commons'] as Source[]).filter(s=>supported(s,category));
+    const active:Source[]=(['met','cleveland'] as Source[]).filter(s=>supported(s,category));
     const results=await Promise.allSettled(active.map(s=>loadArtworks(s,category,signal)));
     if(signal?.aborted) return [];
     const successful=results.filter((r):r is PromiseFulfilledResult<Artwork[]>=>r.status==='fulfilled');
@@ -117,5 +94,5 @@ export const loadArtworks = async (source:SourceSelection,category:Category,sign
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
   if(source==='cleveland') return cleveland(category,signal);
-  return commons(category,signal);
+  return cleveland(category,signal);
 };
