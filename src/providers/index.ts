@@ -66,7 +66,7 @@ const met = async (category:Category, signal?:AbortSignal, artist?:string):Promi
  const params=new URLSearchParams({hasImages:'true',q:term,offset:'0',limit:artist?'320':'100'});
  if(artist)params.set('artistOrCulture','true');
  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?${params}`,signal);
- const ids:number[]=(search.objectIDs||[]).slice(0,artist?120:48);
+ const ids:number[]=(search.objectIDs||[]).slice(0,artist?48:16);
  const found:Artwork[]=[];
  // Artist searches can include unrelated objects. Scan several batches, with bounded concurrency.
  for(let offset=0;offset<ids.length;offset+=2){
@@ -81,7 +81,7 @@ const met = async (category:Category, signal?:AbortSignal, artist?:string):Promi
     license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,
     width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined});
   }
-  if(artist&&found.length>=48)break;
+  if(artist&&found.length>=32)break;
   if(offset+2<ids.length)await pause(350,signal);
  }
  return found;
@@ -114,7 +114,7 @@ const rijks = async (category:Category,signal?:AbortSignal):Promise<Artwork[]> =
   const term=terms[category].rijks;if(!term)return [];
   const params=new URLSearchParams({imageAvailable:'true',description:term});
   const search=await fetchJson(`${rijksBase}/search/collection?${params}`,signal);
-  const ids:string[]=(search.orderedItems||[]).map((o:any)=>String(o.id||'').match(/\/(\d+)$/)?.[1]).filter(Boolean).slice(0,32);
+  const ids:string[]=(search.orderedItems||[]).map((o:any)=>String(o.id||'').match(/\/(\d+)$/)?.[1]).filter(Boolean).slice(0,16);
   const results:PromiseSettledResult<any>[]=[];
   for(let i=0;i<ids.length;i+=4){
     if(signal?.aborted)break;
@@ -148,7 +148,7 @@ const rijks = async (category:Category,signal?:AbortSignal):Promise<Artwork[]> =
     const title=textValue(root?._label||root?.identified_by?.find?.((n:any)=>n.type==='Name')?.content)||'Rijksmuseum eseri';
     const artist=textValue(root?.produced_by?.carried_out_by?.[0]?._label)||undefined;
     items.push({id:`rijks:${ids[i]}`,source:'rijks',title,artist,category,
-      imageUrl:`${iiif}/full/1600,/0/default.jpg`,
+      imageUrl:`${iiif}/full/3840,/0/default.jpg`,
       thumbnailUrl:`${iiif}/full/480,/0/default.jpg`,
       license:'Rijksmuseum – kullanım koşullarını doğrulayın',
       sourceUrl:`https://id.rijksmuseum.nl/${ids[i]}`});
@@ -182,6 +182,29 @@ const nasa=async(category:Category,signal?:AbortSignal):Promise<Artwork[]>=>{
    category,imageUrl:image,thumbnailUrl:image,license:'NASA — kullanım kurallarını kontrol edin',
    sourceUrl:`https://images.nasa.gov/details/${encodeURIComponent(info.nasa_id)}`}];
  });
+};
+
+const nasaAssetsCache=new Map<string,string>();
+/** Resolve NASA's original/large asset only when a slide is actually opened. */
+export const resolveArtworkImage=async(art:Artwork,signal?:AbortSignal):Promise<string>=>{
+ if(art.source!=='nasa')return art.imageUrl;
+ const id=art.id.slice('nasa:'.length);
+ const cached=nasaAssetsCache.get(id);if(cached)return cached;
+ const json=await fetchJson(`${nasaBase}/asset/${encodeURIComponent(id)}`,signal);
+ const urls:string[]=(json.collection?.items||[]).map((v:any)=>v.href).filter((v:any):v is string=>typeof v==='string'&&/^https:\/\//.test(v)&&/\.(?:jpe?g|png)(?:\?|$)/i.test(v));
+ const rank=(url:string)=>{
+  const file=decodeURIComponent(url.split('/').pop()||'').toLowerCase();
+  if(/(?:~|_|-|\b)orig(?:inal)?(?:\.|_|-|\b)/.test(file))return 5;
+  if(/(?:~|_|-|\b)large(?:\.|_|-|\b)/.test(file))return 4;
+  if(/(?:~|_|-|\b)medium(?:\.|_|-|\b)/.test(file))return 3;
+  if(/(?:~|_|-|\b)small(?:\.|_|-|\b)/.test(file))return 2;
+  if(/(?:~|_|-|\b)thumb(?:\.|_|-|\b)/.test(file))return 0;
+  return 1;
+ };
+ const best=[...urls].sort((a,b)=>rank(b)-rank(a))[0];
+ if(!best)throw new Error('NASA yüksek çözünürlüklü görsel bulunamadı');
+ nasaAssetsCache.set(id,best);
+ return best;
 };
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
