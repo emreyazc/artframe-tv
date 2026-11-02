@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
