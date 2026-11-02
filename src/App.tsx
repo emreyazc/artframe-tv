@@ -5,30 +5,6 @@ import {featuredArtists,loadArtworks,loadArtistArtworks} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','cleveland','rijks','openverse','nasa'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
-// Accept only images close to the TV's 16:9 aspect ratio (roughly 1.6–2.0).
-const isWide=(width:number,height:number)=>width>0&&height>0&&width/height>=1.6&&width/height<=2;
-const measureImage=(url:string,signal:AbortSignal):Promise<{width:number;height:number}|null>=>new Promise(resolve=>{
- if(signal.aborted){resolve(null);return;}
- const img=new window.Image();let done=false;
- const finish=(size:{width:number;height:number}|null)=>{if(done)return;done=true;clearTimeout(timeout);signal.removeEventListener('abort',cancel);img.onload=null;img.onerror=null;img.src='';resolve(size);};
- const cancel=()=>finish(null);
- const timeout=window.setTimeout(()=>finish(null),8000);
- signal.addEventListener('abort',cancel,{once:true});
- img.onload=()=>finish({width:img.naturalWidth,height:img.naturalHeight});
- img.onerror=()=>finish(null);
- img.src=url;
-});
-const filterWide=async(items:Artwork[],signal:AbortSignal):Promise<Artwork[]>=>{
- const result:(Artwork|null)[]=new Array(items.length).fill(null);
- let cursor=0;
- const worker=async()=>{while(cursor<items.length&&!signal.aborted){
-  const at=cursor++;const art=items[at];
-  const dimensions=art.width&&art.height?{width:art.width,height:art.height}:await measureImage(art.thumbnailUrl,signal);
-  if(dimensions&&isWide(dimensions.width,dimensions.height))result[at]=art;
- }};
- await Promise.all(Array.from({length:Math.min(6,items.length)},()=>worker()));
- return result.filter((a):a is Artwork=>a!==null);
-};
 export default function App(){
  const [prefs,setPrefs]=useState<Preferences>(()=>{const saved=read('artframe:prefs',defaults);const stored=(saved.sources||defaults.sources).map(s=>String(s)==='chicago'?'cleveland':s);const migrated=localStorage.getItem('artframe:rijks-migrated')==='1'?stored:[...stored,'rijks'];localStorage.setItem('artframe:rijks-migrated','1');const expanded=localStorage.getItem('artframe:new-sources-20261102')==='1'?migrated:[...migrated,'openverse','nasa'];localStorage.setItem('artframe:new-sources-20261102','1');return {...defaults,...saved,sources:Array.from(new Set(expanded)).filter((s):s is Source=>allSources.includes(s as Source))};});
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
@@ -70,12 +46,11 @@ export default function App(){
    }else{
      data=await loadArtworks(source,category,controller.signal);
    }
-   const filtered=(browseMode==='categories'&&(prefs.preferWide??true))?await filterWide(data,controller.signal):data;
-   if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);
+   if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(data):data);
   }
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
- },[source,category,artist,browseMode,prefs.sources,prefs.shuffle,prefs.preferWide]);
+ },[source,category,artist,browseMode,prefs.sources,prefs.shuffle]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
  const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
@@ -111,18 +86,18 @@ export default function App(){
    <div className="section-heading"><div><h2>{browseMode==='artists'?artist:category}</h2><p>{browseMode==='artists'?'The Met + Cleveland':sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
    {warning&&!error&&<div className="message" role="status">{warning}</div>}
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
-   {!loading&&!error&&!artworks.length&&<div className="message">{browseMode==='artists'?'Bu sanatçı için açık erişimli eser bulunamadı. Başka bir sanatçı deneyin veya ayarlardan The Met ve Cleveland kaynaklarını etkinleştirin.':'Bu aramada 16:9\'a yakın uygun eser bulunamadı. Başka bir kategori deneyin veya 16:9 filtresini kapatın.'}</div>}
-   {loading&&<div className="message">Koleksiyon yükleniyor ve görsellerin ekran oranları kontrol ediliyor…</div>}
+   {!loading&&!error&&!artworks.length&&<div className="message">{browseMode==='artists'?'Bu sanatçı için açık erişimli eser bulunamadı. Başka bir sanatçı deneyin veya ayarlardan The Met ve Cleveland kaynaklarını etkinleştirin.':'Bu kaynak ve kategoride görüntülenebilir eser bulunamadı. Başka bir kategori veya kaynak deneyin.'}</div>}
+   {loading&&<div className="message">Koleksiyon yükleniyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
   {view==='player'&&selected&&<div className="player" onMouseMove={()=>setShowOverlay(true)}>
-   {prefs.fit==='frame'&&(browseMode==='artists'||!(prefs.preferWide??true))&&<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img className={`full-art ${browseMode==='artists'?'frame':(prefs.preferWide??true)?'cover':prefs.fit}`} src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
+   {<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
+   <img className="full-art frame" src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
    <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<><h2>{selected.title}</h2><p>{selected.artist||sourceNames[selected.source]} {selected.year?`· ${selected.year}`:''}</p><small>{selected.license} · <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Kaynak sayfası</a></small></>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
    <button className="overlay-toggle" onClick={()=>setShowOverlay(v=>!v)} aria-label="Bilgileri gizle/göster"/>
   </div>}
-  {view==='settings'&&<div className="settings-page"><header className="topbar"><button className="back-btn" onClick={back}><ArrowLeft size={19}/> Galeriye dön</button><h2>Ayarlar</h2></header><div className="settings-content"><h1>ArtFrame ayarları</h1><p className="muted">Tercihler bu cihazın yerel depolamasına kaydedilir.</p><h3>Görsel kaynakları</h3><div className="checks">{allSources.map(s=><label key={s}><input type="checkbox" checked={prefs.sources.includes(s)} disabled={prefs.sources.length===1&&prefs.sources.includes(s)} onChange={e=>changePrefs({sources:e.target.checked?[...prefs.sources,s]:prefs.sources.filter(v=>v!==s)})}/>{sourceNames[s]}</label>)}</div><h3>Kategoriler</h3><div className="checks two">{categories.map(c=><label key={c}><input type="checkbox" checked={prefs.categories.includes(c)} disabled={prefs.categories.length===1&&prefs.categories.includes(c)} onChange={e=>changePrefs({categories:e.target.checked?[...prefs.categories,c]:prefs.categories.filter(v=>v!==c)})}/>{c}</label>)}</div><h3>Sanat modu</h3><div className="setting-row"><label htmlFor="interval">Görsel değiştirme süresi</label><select id="interval" value={prefs.interval} onChange={e=>changePrefs({interval:Number(e.target.value)})}>{[30,60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n<60?`${n} saniye`:`${n/60} dakika`}</option>)}</select></div><div className="setting-row"><label htmlFor="fit">Görüntü yerleşimi</label><select id="fit" value={prefs.fit} onChange={e=>changePrefs({fit:e.target.value as Preferences['fit']})}><option value="contain">Tamamını göster</option><option value="cover">Ekranı doldur (kırpabilir)</option><option value="frame">Sanat çerçevesi (bulanık arka plan)</option></select></div><div className="checks"><label><input type="checkbox" checked={prefs.preferWide??true} onChange={e=>changePrefs({preferWide:e.target.checked})}/>Yalnızca 16:9'a yakın yatay görselleri göster</label><label><input type="checkbox" checked={prefs.showInfo} onChange={e=>changePrefs({showInfo:e.target.checked})}/>Eser bilgilerini göster</label><label><input type="checkbox" checked={prefs.shuffle} onChange={e=>changePrefs({shuffle:e.target.checked})}/><Shuffle size={15}/> Karışık sıralama</label></div><p className="note">TV genelinde otomatik ekran koruyucu başlatma henüz uygulanmadı. Bu özellik için Tizen sistem yetkileri ayrıca araştırılacak.</p></div></div>}
+  {view==='settings'&&<div className="settings-page"><header className="topbar"><button className="back-btn" onClick={back}><ArrowLeft size={19}/> Galeriye dön</button><h2>Ayarlar</h2></header><div className="settings-content"><h1>ArtFrame ayarları</h1><p className="muted">Tercihler bu cihazın yerel depolamasına kaydedilir.</p><h3>Görsel kaynakları</h3><div className="checks">{allSources.map(s=><label key={s}><input type="checkbox" checked={prefs.sources.includes(s)} disabled={prefs.sources.length===1&&prefs.sources.includes(s)} onChange={e=>changePrefs({sources:e.target.checked?[...prefs.sources,s]:prefs.sources.filter(v=>v!==s)})}/>{sourceNames[s]}</label>)}</div><h3>Kategoriler</h3><div className="checks two">{categories.map(c=><label key={c}><input type="checkbox" checked={prefs.categories.includes(c)} disabled={prefs.categories.length===1&&prefs.categories.includes(c)} onChange={e=>changePrefs({categories:e.target.checked?[...prefs.categories,c]:prefs.categories.filter(v=>v!==c)})}/>{c}</label>)}</div><h3>Sanat modu</h3><div className="setting-row"><label htmlFor="interval">Görsel değiştirme süresi</label><select id="interval" value={prefs.interval} onChange={e=>changePrefs({interval:Number(e.target.value)})}>{[30,60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n<60?`${n} saniye`:`${n/60} dakika`}</option>)}</select></div><div className="checks"><label><input type="checkbox" checked={prefs.showInfo} onChange={e=>changePrefs({showInfo:e.target.checked})}/>Eser bilgilerini göster</label><label><input type="checkbox" checked={prefs.shuffle} onChange={e=>changePrefs({shuffle:e.target.checked})}/><Shuffle size={15}/> Karışık sıralama</label></div><p className="note">TV genelinde otomatik ekran koruyucu başlatma henüz uygulanmadı. Bu özellik için Tizen sistem yetkileri ayrıca araştırılacak.</p></div></div>}
  </main>;
 }
