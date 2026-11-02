@@ -184,27 +184,28 @@ const nasa=async(category:Category,signal?:AbortSignal):Promise<Artwork[]>=>{
  });
 };
 
-const nasaAssetsCache=new Map<string,string>();
-/** Resolve NASA's original/large asset only when a slide is actually opened. */
-export const resolveArtworkImage=async(art:Artwork,signal?:AbortSignal):Promise<string>=>{
- if(art.source!=='nasa')return art.imageUrl;
+const nasaAssetsCache=new Map<string,string[]>();
+/** NASA's search preview is not a display asset. Fetch the asset manifest on demand. */
+export const resolveArtworkImages=async(art:Artwork,signal?:AbortSignal):Promise<string[]>=>{
+ if(art.source!=='nasa')return [art.imageUrl];
  const id=art.id.slice('nasa:'.length);
  const cached=nasaAssetsCache.get(id);if(cached)return cached;
  const json=await fetchJson(`${nasaBase}/asset/${encodeURIComponent(id)}`,signal);
- const urls:string[]=(json.collection?.items||[]).map((v:any)=>v.href).filter((v:any):v is string=>typeof v==='string'&&/^https:\/\//.test(v)&&/\.(?:jpe?g|png)(?:\?|$)/i.test(v));
+ const urls:string[]=(json.collection?.items||[]).map((v:any)=>v.href)
+  .filter((v:any):v is string=>typeof v==='string'&&/^https:\/\//.test(v)&&/\.(?:jpe?g|png)(?:\?|$)/i.test(v));
  const rank=(url:string)=>{
-  const file=decodeURIComponent(url.split('/').pop()||'').toLowerCase();
-  if(/(?:~|_|-|\b)orig(?:inal)?(?:\.|_|-|\b)/.test(file))return 5;
-  if(/(?:~|_|-|\b)large(?:\.|_|-|\b)/.test(file))return 4;
-  if(/(?:~|_|-|\b)medium(?:\.|_|-|\b)/.test(file))return 3;
-  if(/(?:~|_|-|\b)small(?:\.|_|-|\b)/.test(file))return 2;
-  if(/(?:~|_|-|\b)thumb(?:\.|_|-|\b)/.test(file))return 0;
+  const name=decodeURIComponent(url.split('/').pop()||'').toLowerCase();
+  if(/~orig(?:inal)?\./.test(name))return 5;
+  if(/~large\./.test(name))return 4;
+  if(/~medium\./.test(name))return 3;
+  if(/~small\./.test(name))return 2;
+  if(/~thumb\./.test(name))return 0;
   return 1;
  };
- const best=[...urls].sort((a,b)=>rank(b)-rank(a))[0];
- if(!best)throw new Error('NASA yüksek çözünürlüklü görsel bulunamadı');
- nasaAssetsCache.set(id,best);
- return best;
+ const sorted=[...new Set(urls)].sort((a,b)=>rank(b)-rank(a));
+ if(!sorted.length)throw new Error('NASA dosya listesinde JPG/PNG bulunamadı');
+ nasaAssetsCache.set(id,sorted);
+ return sorted;
 };
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
