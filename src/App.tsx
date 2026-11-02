@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle} from 'lucide-react';
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
-import {loadArtworks,supported} from './providers';
+import {loadArtworks} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','chicago','commons'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
@@ -50,13 +50,12 @@ export default function App(){
  useEffect(()=>{if(source!=='all'&&!prefs.sources.includes(source))setSource('all');},[prefs.sources,source]);
  useEffect(()=>{if(!availableCategories.includes(category)&&availableCategories.length)setCategory(availableCategories[0]);},[availableCategories,category]);
  const refresh=useCallback(async()=>{
-  if(source!=='all'&&!supported(source,category)){setArtworks([]);setError('Bu kategoride seçilen kaynakta eser bulunmuyor. Tüm kaynaklar seçeneğini deneyin.');return;}
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
   setLoading(true);setError('');setArtworks([]);setIndex(0);
-  try{const data=await loadArtworks(source,category,controller.signal);const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);}
+  try{const data=source==='all'?(await Promise.allSettled(prefs.sources.map(s=>loadArtworks(s,category,controller.signal)))).flatMap(result=>result.status==='fulfilled'?result.value:[]):await loadArtworks(source,category,controller.signal);const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);}
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
- },[source,category,prefs.shuffle,prefs.preferWide]);
+ },[source,category,prefs.sources,prefs.shuffle,prefs.preferWide]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
  const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
@@ -91,7 +90,7 @@ export default function App(){
    <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
    <div className="section-heading"><div><h2>{category}</h2><p>{sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
-   {!loading&&!error&&!artworks.length&&<div className="message">Bu seçimde 16:9 ekrana uygun eser bulunamadı. Başka bir kategori veya kaynak deneyin.</div>}
+   {!loading&&!error&&!artworks.length&&<div className="message">Bu aramada 16:9'a yakın uygun eser bulunamadı. Başka bir kategori deneyin veya 16:9 filtresini kapatın.</div>}
    {loading&&<div className="message">Koleksiyon yükleniyor ve görsellerin ekran oranları kontrol ediliyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
