@@ -3,7 +3,7 @@ import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,Refre
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
 import {loadArtworks} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
-const allSources:Source[]=['met','chicago','commons'];
+const allSources:Source[]=['met','cleveland','commons'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
 // Accept only images close to the TV's 16:9 aspect ratio (roughly 1.6–2.0).
 const isWide=(width:number,height:number)=>width>0&&height>0&&width/height>=1.6&&width/height<=2;
@@ -30,7 +30,7 @@ const filterWide=async(items:Artwork[],signal:AbortSignal):Promise<Artwork[]>=>{
  return result.filter((a):a is Artwork=>a!==null);
 };
 export default function App(){
- const [prefs,setPrefs]=useState<Preferences>(()=>read('artframe:prefs',defaults));
+ const [prefs,setPrefs]=useState<Preferences>(()=>{const saved=read('artframe:prefs',defaults);return {...defaults,...saved,sources:Array.from(new Set((saved.sources||defaults.sources).map(s=>s==='chicago'?'cleveland':s))).filter((s):s is Source=>allSources.includes(s as Source))};});
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
  const [source,setSource]=useState<SourceSelection>('all');
  const [category,setCategory]=useState<Category>('Klasik resim');
