@@ -2,18 +2,18 @@ import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
 const terms: Record<Category,{met?:string;chicago?:string;commons?:string}> = {
-  'Mimari':{commons:'architecture buildings'},
-  'Doğa ve manzara':{met:'landscape painting',chicago:'landscape',commons:'landscape nature'},
-  'Klasik resim':{met:'oil painting',chicago:'painting'},
-  'Empresyonizm':{met:'impressionism',chicago:'impressionism'},
-  'Uzay ve astronomi':{commons:'astronomy nebula'},
-  'Modern sanat':{met:'modern art',chicago:'modern art'},
-  'Şehirler':{commons:'city skyline'},
-  'Japon sanatı':{met:'Japanese art',chicago:'Japanese prints'},
-  'Hayvanlar':{met:'animals painting',commons:'wildlife animals'},
-  'Fotoğrafçılık':{chicago:'photography',commons:'photography'},
-  'Soyut sanat':{met:'abstract art',chicago:'abstract'},
-  'Tarih':{met:'historical artifacts',commons:'historic monuments'}
+ 'Mimari':{met:'architecture',chicago:'architecture',commons:'architecture buildings'},
+ 'Doğa ve manzara':{met:'landscape',chicago:'landscape',commons:'landscape nature'},
+ 'Klasik resim':{met:'painting',chicago:'painting',commons:'classical painting'},
+ 'Empresyonizm':{met:'impressionism',chicago:'impressionism',commons:'impressionist painting'},
+ 'Uzay ve astronomi':{met:'astronomy',chicago:'astronomy',commons:'astronomy nebula'},
+ 'Modern sanat':{met:'modern art',chicago:'modern art',commons:'modern art'},
+ 'Şehirler':{met:'city',chicago:'cityscape',commons:'city skyline'},
+ 'Japon sanatı':{met:'Japanese art',chicago:'Japanese prints',commons:'Japanese art'},
+ 'Hayvanlar':{met:'animals',chicago:'animals',commons:'wildlife animals'},
+ 'Fotoğrafçılık':{met:'photograph',chicago:'photography',commons:'photography'},
+ 'Soyut sanat':{met:'abstract',chicago:'abstract',commons:'abstract art'},
+ 'Tarih':{met:'historical',chicago:'history',commons:'historic monuments'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
 const fetchJson = async (url:string, signal?:AbortSignal) => {
@@ -25,7 +25,7 @@ const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> =>
   const term=terms[category].met; if(!term) return [];
   // The Met's public Collection API; keep the adapter isolated for future API changes.
   const search=await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1.1/search?hasImages=true&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
-  const ids:number[]=(search.objectIDs||[]).slice(0,28);
+  const ids:number[]=(search.objectIDs||[]).slice(0,100);
   const objects=await Promise.allSettled(ids.map(id=>fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,signal)));
   return objects.flatMap((result):Artwork[]=>{
     if(result.status!=='fulfilled') return [];
@@ -36,17 +36,25 @@ const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> =>
 };
 const chicago = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
   const term=terms[category].chicago; if(!term) return [];
-  const params=new URLSearchParams({q:term,limit:'40',fields:'id,title,artist_display,date_display,image_id,is_public_domain,api_link,dimensions','query[term][is_public_domain]':'true'});
+  const params=new URLSearchParams({q:term,limit:'100',fields:'id,title,artist_display,date_display,image_id,is_public_domain,api_link,dimensions','query[term][is_public_domain]':'true'});
   // Public-domain filtering is also enforced locally.
-  const json=await fetchJson(`https://api.artic.edu/api/v1/artworks/search?${params.toString()}`,signal);
+  let json:any;
+ try{json=await fetchJson(`https://api.artic.edu/api/v1/artworks/search?${params.toString()}`,signal);}
+ catch(e){if(signal?.aborted)throw e;throw new Error('Art Institute of Chicago servisine erişilemiyor (ağ/CORS veya servis hatası)');}
   const base=(json.config?.iiif_url as string)||'https://www.artic.edu/iiif/2';
   return (json.data||[]).filter((o:any)=>o.is_public_domain&&o.image_id).map((o:any):Artwork=>({id:`chicago:${o.id}`,source:'chicago',title:o.title||'İsimsiz eser',artist:o.artist_display||undefined,year:o.date_display||undefined,category,imageUrl:`${base}/${o.image_id}/full/1680,/0/default.jpg`,thumbnailUrl:`${base}/${o.image_id}/full/480,/0/default.jpg`,license:'CC0 / Public Domain',sourceUrl:`https://www.artic.edu/artworks/${o.id}`}));
 };
 const commons = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
   const term=terms[category].commons; if(!term) return [];
-  const params=new URLSearchParams({action:'query',generator:'search',gsrsearch:`filetype:bitmap ${term}`,gsrnamespace:'6',gsrlimit:'32',prop:'imageinfo',iiprop:'url|size|extmetadata',iiurlwidth:'480',format:'json',origin:'*'});
-  const json=await fetchJson(`https://commons.wikimedia.org/w/api.php?${params}`,signal);
-  const pages:any[]=Object.values(json.query?.pages||{});
+  const params=new URLSearchParams({action:'query',generator:'search',gsrsearch:`filetype:bitmap ${term}`,gsrnamespace:'6',gsrlimit:'50',prop:'imageinfo',iiprop:'url|size|extmetadata',iiurlwidth:'480',format:'json',origin:'*'});
+  const pages:any[]=[];
+  for(let page=0;page<4;page++){
+    const json=await fetchJson(`https://commons.wikimedia.org/w/api.php?${params}`,signal);
+    pages.push(...Object.values(json.query?.pages||{}));
+    const next=json.continue?.gsroffset;
+    if(next===undefined||signal?.aborted)break;
+    params.set('gsroffset',String(next));
+  }
   const allowed=/public domain|cc0|cc by|cc-by|creative commons attribution/i;
   const clean=(html:string)=>html.replace(/<[^>]*>/g,' ').replace(/&[^;]+;/g,' ').trim();
   return pages.flatMap((p):Artwork[]=>{
