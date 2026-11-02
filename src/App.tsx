@@ -3,7 +3,7 @@ import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,Refre
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
 import {loadArtworks} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
-const allSources:Source[]=['met','cleveland'];
+const allSources:Source[]=['met','cleveland','rijks'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
 // Accept only images close to the TV's 16:9 aspect ratio (roughly 1.6–2.0).
 const isWide=(width:number,height:number)=>width>0&&height>0&&width/height>=1.6&&width/height<=2;
