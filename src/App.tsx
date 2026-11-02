@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle} from 'lucide-react';
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
-import {loadArtworks} from './providers';
+import {featuredArtists,loadArtworks,loadArtistArtworks} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
 const allSources:Source[]=['met','cleveland','rijks','openverse','nasa'];
 const shuffleArray=<T,>(items:T[]):T[]=>[...items].sort(()=>Math.random()-.5);
@@ -34,6 +34,8 @@ export default function App(){
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
  const [source,setSource]=useState<SourceSelection>('all');
  const [category,setCategory]=useState<Category>('Klasik resim');
+ const [browseMode,setBrowseMode]=useState<'categories'|'artists'>('categories');
+ const [artist,setArtist]=useState<string>(featuredArtists[0]);
  const [artworks,setArtworks]=useState<Artwork[]>([]);
  const [loading,setLoading]=useState(false);
  const [error,setError]=useState('');
@@ -55,7 +57,11 @@ export default function App(){
   setLoading(true);setError('');setWarning('');setArtworks([]);setIndex(0);
   try{
    let data:Artwork[];
-   if(source==='all'){
+   if(browseMode==='artists'){
+     const result=await loadArtistArtworks(artist,prefs.sources,controller.signal);
+     data=result.artworks;
+     if(result.failed.length&&!controller.signal.aborted)setWarning(`Bazı sanatçı kaynaklarına erişilemedi: ${result.failed.map(s=>sourceNames[s]).join(', ')}`);
+   }else if(source==='all'){
      const results=await Promise.allSettled(prefs.sources.map(s=>loadArtworks(s,category,controller.signal)));
      const failures=results.flatMap((result,i)=>result.status==='rejected'?[sourceNames[prefs.sources[i]]]:[]);
      data=results.flatMap(result=>result.status==='fulfilled'?result.value:[]);
@@ -64,12 +70,12 @@ export default function App(){
    }else{
      data=await loadArtworks(source,category,controller.signal);
    }
-   const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;
+   const filtered=(browseMode==='categories'&&(prefs.preferWide??true))?await filterWide(data,controller.signal):data;
    if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);
   }
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
- },[source,category,prefs.sources,prefs.shuffle,prefs.preferWide]);
+ },[source,category,artist,browseMode,prefs.sources,prefs.shuffle,prefs.preferWide]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
  const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
@@ -101,18 +107,18 @@ export default function App(){
   {view==='gallery'&&<>
    <header className="topbar"><div className="brand"><span className="brand-icon"><Image size={22}/></span><div><strong>ArtFrame <span>TV</span></strong><small>Görsel dünyanı keşfet.</small></div></div><button className="icon-btn" onClick={()=>setView('settings')} aria-label="Ayarlar"><Settings/></button></header>
    <section className="intro"><div className="intro-copy"><p className="eyebrow"><span className="intro-dot"/> GÖRSEL KOLEKSİYONLAR</p><h1>Ekranını <span>keşfe aç.</span></h1><p>Sanattan doğaya, şehirlerden uzaya. Dünyanın görsel koleksiyonları tek ekranda.</p><div className="intro-tags" aria-label="Keşfedilecek kategoriler"><span>Sanat</span><span>Doğa</span><span>Uzay</span><span>Fotoğraf</span></div></div><div className="intro-visual" aria-hidden="true"><div className="visual-orbit orbit-one"/><div className="visual-orbit orbit-two"/><div className="visual-tile tile-one"><span>01</span><div className="tile-landscape"/></div><div className="visual-tile tile-two"><span>02</span><div className="tile-cosmos"/></div><div className="visual-tile tile-three"><span>03</span><div className="tile-architecture"/></div><div className="visual-caption">EXPLORE / DISPLAY / ENJOY</div></div></section>
-   <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
-   <div className="section-heading"><div><h2>{category}</h2><p>{sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
+   <nav className="browse-tabs" aria-label="Keşif yöntemi"><button className={browseMode==='categories'?'active':''} onClick={()=>setBrowseMode('categories')} aria-pressed={browseMode==='categories'}>Kategoriler</button><button className={browseMode==='artists'?'active':''} onClick={()=>setBrowseMode('artists')} aria-pressed={browseMode==='artists'}>Sanatçılar</button></nav><section className="filters">{browseMode==='categories'?<><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div></>:<div><label htmlFor="artist">SANATÇI</label><select id="artist" value={artist} onChange={e=>setArtist(e.target.value)}>{featuredArtists.map(name=><option key={name} value={name}>{name}</option>)}</select></div>}<button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
+   <div className="section-heading"><div><h2>{browseMode==='artists'?artist:category}</h2><p>{browseMode==='artists'?'The Met + Cleveland':sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
    {warning&&!error&&<div className="message" role="status">{warning}</div>}
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
-   {!loading&&!error&&!artworks.length&&<div className="message">Bu aramada 16:9'a yakın uygun eser bulunamadı. Başka bir kategori deneyin veya 16:9 filtresini kapatın.</div>}
+   {!loading&&!error&&!artworks.length&&<div className="message">{browseMode==='artists'?'Bu sanatçı için açık erişimli eser bulunamadı. Başka bir sanatçı deneyin veya ayarlardan The Met ve Cleveland kaynaklarını etkinleştirin.':'Bu aramada 16:9\'a yakın uygun eser bulunamadı. Başka bir kategori deneyin veya 16:9 filtresini kapatın.'}</div>}
    {loading&&<div className="message">Koleksiyon yükleniyor ve görsellerin ekran oranları kontrol ediliyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
   {view==='player'&&selected&&<div className="player" onMouseMove={()=>setShowOverlay(true)}>
-   {prefs.fit==='frame'&&!(prefs.preferWide??true)&&<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img className={`full-art ${(prefs.preferWide??true)?'cover':prefs.fit}`} src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
+   {prefs.fit==='frame'&&(browseMode==='artists'||!(prefs.preferWide??true))&&<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
+   <img className={`full-art ${browseMode==='artists'?'frame':(prefs.preferWide??true)?'cover':prefs.fit}`} src={selected.imageUrl} alt={selected.title} onError={e=>{if(e.currentTarget.src!==selected.thumbnailUrl)e.currentTarget.src=selected.thumbnailUrl;}}/>
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
    <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<><h2>{selected.title}</h2><p>{selected.artist||sourceNames[selected.source]} {selected.year?`· ${selected.year}`:''}</p><small>{selected.license} · <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Kaynak sayfası</a></small></>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
    <button className="overlay-toggle" onClick={()=>setShowOverlay(v=>!v)} aria-label="Bilgileri gizle/göster"/>
