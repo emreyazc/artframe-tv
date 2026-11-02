@@ -39,7 +39,7 @@ export default function App(){
     });
     if(!image)continue;
     // Require at least Full HD-class source pixels before a slide is eligible.
-    if(image.naturalWidth<1600||image.naturalHeight<900)continue;
+    if(Math.max(image.naturalWidth,image.naturalHeight)<1900||image.naturalWidth*image.naturalHeight<1500000)continue;
     preparedRef.current[art.id]=url;
     setPrepared(current=>({...current,[art.id]:url}));
     return url;
