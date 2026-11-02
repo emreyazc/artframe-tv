@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle,X} from 'lucide-react';
+import {ArrowLeft,ChevronLeft,ChevronRight,Heart,Image,Maximize,Pause,Play,RefreshCw,Settings,Shuffle} from 'lucide-react';
 import {categories,defaults,sourceNames,type Artwork,type Category,type Preferences,type Source,type SourceSelection} from './types';
 import {loadArtworks,supported} from './providers';
 const read = <T,>(key:string,fallback:T):T=>{try {const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback;}catch{return fallback;}};
