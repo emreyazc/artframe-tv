@@ -17,6 +17,20 @@ const terms: Record<Category,{met?:string;cleveland?:string;rijks?:string;openve
  'Tarih':{met:'historical',cleveland:'history',rijks:'history',openverse:'historical architecture'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
+const normalizeArtist=(value:string)=>value.toLocaleLowerCase('en').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+const matchesArtist=(value:string|undefined,artist:string)=>{
+ const actual=normalizeArtist(value||'');const target=normalizeArtist(artist);
+ return actual.includes(target)||target.split(' ').every(part=>actual.split(' ').includes(part));
+};
+export const featuredArtists=['Claude Monet','Vincent van Gogh','Pierre-Auguste Renoir','Edgar Degas','Paul Cézanne','Rembrandt van Rijn','Johannes Vermeer','Camille Pissarro','Édouard Manet','Paul Gauguin'] as const;
+export const loadArtistArtworks=async(artist:string,sources:Source[],signal?:AbortSignal):Promise<{artworks:Artwork[];failed:Source[]}>=>{
+ const active=sources.filter((s):s is 'met'|'cleveland'=>s==='met'||s==='cleveland');
+ const results=await Promise.allSettled(active.map(s=>s==='met'?met('Klasik resim',signal,artist):cleveland('Klasik resim',signal,artist)));
+ const failed=active.filter((_,i)=>results[i].status==='rejected');
+ if(results.length&&failed.length===results.length)throw new Error('Sanatçı koleksiyonlarına erişilemedi');
+ const artworks=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);
+ return {artworks:[...new Map(artworks.map(a=>[a.id,a])).values()],failed};
+};
 // The Vite proxy is only available while running npm run dev.
 // Production/Tizen keeps the original public endpoints until a TV-safe solution is validated.
 const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
@@ -46,10 +60,10 @@ const fetchJson = async (url:string, signal?:AbortSignal) => {
     await pause(Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,5000):1200,signal);
   }
 };
-const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
-  const term=terms[category].met; if(!term) return [];
+const met = async (category:Category, signal?:AbortSignal, artist?:string):Promise<Artwork[]> => {
+  const term=artist||terms[category].met; if(!term) return [];
   // The Met's public Collection API; keep the adapter isolated for future API changes.
-  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?hasImages=true&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
+  const search=await fetchJson(`${metBase}/public/collection/v1.1/search?hasImages=true${artist?'&artistOrCulture=true':''}&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
   const ids:number[]=(search.objectIDs||[]).slice(0,100);
   const objects:PromiseSettledResult<any>[]=[];
   // Avoid flooding the museum endpoint with 100 concurrent requests.
@@ -61,17 +75,17 @@ const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> =>
   return objects.flatMap((result):Artwork[]=>{
     if(result.status!=='fulfilled') return [];
     const o=result.value;
-    if(!o.isPublicDomain||!o.primaryImageSmall||!o.primaryImage) return [];
+    if(!o.isPublicDomain||!o.primaryImageSmall||!o.primaryImage||(artist&&!matchesArtist(o.artistDisplayName,artist))) return [];
     return [{id:`met:${o.objectID}`,source:'met',title:o.title||'İsimsiz eser',artist:o.artistDisplayName||undefined,year:o.objectDate||undefined,category,imageUrl:o.primaryImage,thumbnailUrl:o.primaryImageSmall,license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined}];
   });
 };
-const cleveland = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
-  const term=terms[category].cleveland;if(!term)return [];
+const cleveland = async (category:Category, signal?:AbortSignal, artist?:string):Promise<Artwork[]> => {
+  const term=artist||terms[category].cleveland;if(!term)return [];
   const params=new URLSearchParams({q:term,has_image:'1',limit:'100',skip:'0'});
   // Cleveland's CC0 status is checked per artwork; copyrighted images are excluded.
   const json=await fetchJson(`${clevelandBase}/api/artworks/?${params}`,signal);
   return (json.data||[]).flatMap((o:any):Artwork[]=>{
-    if(String(o.share_license_status).toUpperCase()!=='CC0'||!o.images?.web?.url)return [];
+    if(String(o.share_license_status).toUpperCase()!=='CC0'||!o.images?.web?.url||(artist&&!matchesArtist((o.creators||[]).map((c:any)=>c.description||c.name).join(' '),artist)))return [];
     const web=o.images.web;
     const print=o.images.print;
     return [{id:`cleveland:${o.id}`,source:'cleveland',title:o.title||'İsimsiz eser',
