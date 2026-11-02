@@ -20,47 +20,49 @@ export default function App(){
  const [index,setIndex]=useState(0);
  const [playing,setPlaying]=useState(true);
  const [showOverlay,setShowOverlay]=useState(true);
- const [slideUrl,setSlideUrl]=useState('');
- const [slideLoading,setSlideLoading]=useState(false);
- const [slideError,setSlideError]=useState('');
-
+ const [prepared,setPrepared]=useState<Record<string,string>>({});
+ const [preparing,setPreparing]=useState(false);
+ const preparedRef=useRef<Record<string,string>>({});
+ const rejectedRef=useRef(new Set<string>());
+ const navigationRef=useRef(0);
  const gridRef=useRef<HTMLDivElement>(null);
  const abort=useRef<AbortController|null>(null);
  const selected=artworks[index];
- useEffect(()=>{
-  if(view!=='player'||!selected)return;
-  const controller=new AbortController();let alive=true;
-  setSlideUrl(selected.thumbnailUrl);setSlideLoading(true);setSlideError('');
-  const load=(url:string)=>new Promise<{url:string;width:number;height:number}>((resolve,reject)=>{
-   const img=new window.Image();
-   img.onload=()=>resolve({url,width:img.naturalWidth,height:img.naturalHeight});
-   img.onerror=()=>reject(new Error('Görsel dosyası açılamadı'));
-   img.src=url;
-  });
-  (async()=>{
-   try{
-    const candidates=await resolveArtworkImages(selected,controller.signal);
-    let best:{url:string;width:number;height:number}|null=null;
-    for(const url of candidates){
-     if(!alive||controller.signal.aborted)return;
-     try{
-      const result=await load(url);
-      if(!best||result.width*result.height>best.width*best.height)best=result;
-      // Prefer the first usable 4K-class asset; avoid downloading every variant.
-      if(result.width>=2560||result.height>=2560)break;
-     }catch{continue;}
-    }
-    if(!alive)return;
-    if(!best)throw new Error('Yüksek çözünürlüklü dosya yüklenemedi');
-    if(selected.source==='nasa'&&Math.max(best.width,best.height)<1600)
-      setSlideError(`NASA yalnızca ${best.width} × ${best.height} px görsel sağladı`);
-    setSlideUrl(best.url);
-   }catch(e){
-    if(alive)setSlideError(e instanceof Error?e.message:'Yüksek çözünürlüklü görsel alınamadı');
-   }finally{if(alive)setSlideLoading(false);}
-  })();
-  return()=>{alive=false;controller.abort();};
- },[view,selected]);
+ const validate=useCallback(async(art:Artwork):Promise<string|null>=>{
+  if(preparedRef.current[art.id])return preparedRef.current[art.id];
+  if(rejectedRef.current.has(art.id))return null;
+  try{
+   const urls=await resolveArtworkImages(art);
+   for(const url of urls){
+    const image=await new Promise<HTMLImageElement|null>(resolve=>{
+     const img=new window.Image();img.onload=()=>resolve(img);img.onerror=()=>resolve(null);img.src=url;
+    });
+    if(!image)continue;
+    // Require at least Full HD-class source pixels before a slide is eligible.
+    if(image.naturalWidth<1600||image.naturalHeight<900)continue;
+    preparedRef.current[art.id]=url;
+    setPrepared(current=>({...current,[art.id]:url}));
+    return url;
+   }
+  }catch{ /* Unavailable or undersized images are excluded from playback. */ }
+  rejectedRef.current.add(art.id);
+  return null;
+ },[]);
+ const goToEligible=useCallback(async(startIndex:number,step:number,enter:boolean)=>{
+  const request=++navigationRef.current;
+  setPreparing(true);
+  for(let count=0;count<artworks.length;count++){
+   const i=(startIndex+count*step+artworks.length*2)%artworks.length;
+   const url=await validate(artworks[i]);
+   if(request!==navigationRef.current)return;
+   if(url){
+    setIndex(i);setPreparing(false);
+    if(enter){setPlaying(true);setShowOverlay(true);setView('player');}
+    return;
+   }
+  }
+  if(request===navigationRef.current){setPreparing(false);setWarning('Sanat modu için yeterli çözünürlükte görsel bulunamadı.');}
+ },[artworks,validate]);
  useEffect(()=>{localStorage.setItem('artframe:prefs',JSON.stringify(prefs));},[prefs]);
  useEffect(()=>{localStorage.setItem('artframe:favorites',JSON.stringify(favorites));},[favorites]);
  const availableCategories=useMemo(()=>prefs.categories,[prefs.categories]);
@@ -68,6 +70,7 @@ export default function App(){
  useEffect(()=>{if(!availableCategories.includes(category)&&availableCategories.length)setCategory(availableCategories[0]);},[availableCategories,category]);
  const refresh=useCallback(async()=>{
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
+  navigationRef.current++;preparedRef.current={};rejectedRef.current.clear();setPrepared({});setPreparing(false);
   setLoading(true);setError('');setWarning('');setArtworks([]);setIndex(0);
   try{
    let data:Artwork[];
@@ -90,10 +93,10 @@ export default function App(){
   finally{if(!controller.signal.aborted)setLoading(false);}
  },[source,category,artist,browseMode,prefs.sources,prefs.shuffle]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
- const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
+ const next=useCallback((delta:number)=>{if(artworks.length)void goToEligible((index+delta+artworks.length)%artworks.length,delta>=0?1:-1,false);},[artworks.length,index,goToEligible]);
  useEffect(()=>{if(view!=='player'||!showOverlay)return;const timer=window.setTimeout(()=>setShowOverlay(false),4000);return()=>window.clearTimeout(timer);},[view,showOverlay,index]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
- const back=useCallback(()=>{if(view!=='gallery'){setView('gallery');setPlaying(false);}else{gridRef.current?.focus();}},[view]);
+ const back=useCallback(()=>{navigationRef.current++;setPreparing(false);if(view!=='gallery'){setView('gallery');setPlaying(false);}else{gridRef.current?.focus();}},[view]);
  useEffect(()=>{
   const handler=(e:KeyboardEvent)=>{
    if(e.key==='Escape'||e.key==='Backspace'||e.key==='BrowserBack'){e.preventDefault();back();return;}
@@ -107,7 +110,7 @@ export default function App(){
   window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
  },[view,back,next]);
  useEffect(()=>{if(view!=='player'||!playing||artworks.length<2)return;const t=window.setInterval(()=>next(1),prefs.interval*1000);return()=>clearInterval(t);},[view,playing,artworks.length,prefs.interval,next]);
- const start=(i:number)=>{setIndex(i);setPlaying(true);setShowOverlay(true);setView('player');};
+ const start=(i:number)=>{void goToEligible(i,1,true);};
  const changePrefs=(patch:Partial<Preferences>)=>setPrefs(p=>({...p,...patch}));
  const onGridKey=(e:React.KeyboardEvent<HTMLDivElement>)=>{
   const cards=Array.from(gridRef.current?.querySelectorAll<HTMLButtonElement>('.art-card')||[]);
@@ -126,13 +129,13 @@ export default function App(){
    {warning&&!error&&<div className="message" role="status">{warning}</div>}
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
    {!loading&&!error&&!artworks.length&&<div className="message">{browseMode==='artists'?'Bu sanatçı için açık erişimli eser bulunamadı. Başka bir sanatçı deneyin veya ayarlardan The Met ve Cleveland kaynaklarını etkinleştirin.':'Bu kaynak ve kategoride görüntülenebilir eser bulunamadı. Başka bir kategori veya kaynak deneyin.'}</div>}
-   {loading&&<div className="message">Koleksiyon yükleniyor…</div>}
+   {loading&&<div className="message">Koleksiyon yükleniyor…</div>}{preparing&&view==='gallery'&&<div className="message" role="status">Sanat modu için yüksek çözünürlüklü görseller kontrol ediliyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
   {view==='player'&&selected&&<div className="player" onMouseMove={()=>{if(!showOverlay)setShowOverlay(true);}} onClick={e=>{if(e.target===e.currentTarget)setShowOverlay(true);}}>
    {<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img key={selected.id} className="full-art frame" src={slideUrl||selected.thumbnailUrl} alt={selected.title}/>{(slideLoading||slideError)&&<div className="slide-loading" aria-live="polite">{slideLoading?'Yüksek çözünürlüklü görsel yükleniyor…':`Görsel kalitesi: ${slideError}`}</div>}
+   <img key={selected.id} className="full-art frame" src={prepared[selected.id]} alt={selected.title}/>
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
    <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<div className="art-meta-line"><strong title={selected.title}>{selected.title}</strong><span className="meta-dot">·</span><span title={selected.artist||sourceNames[selected.source]}>{selected.artist||sourceNames[selected.source]}</span>{selected.year&&<><span className="meta-dot">·</span><span>{selected.year}</span></>}</div>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
 
