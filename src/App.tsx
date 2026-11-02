@@ -20,12 +20,10 @@ export default function App(){
  const [index,setIndex]=useState(0);
  const [playing,setPlaying]=useState(true);
  const [showOverlay,setShowOverlay]=useState(true);
- const [imageQuality,setImageQuality]=useState<{width:number;height:number;fallback:boolean}|null>(null);
+
  const gridRef=useRef<HTMLDivElement>(null);
  const abort=useRef<AbortController|null>(null);
  const selected=artworks[index];
- const qualityInfo=useMemo(()=>{if(!imageQuality)return null;const {width,height}=imageQuality;const displayScale=Math.min(window.innerWidth/width,window.innerHeight/height);const score=1/Math.max(1,displayScale);return {score,acceptable:score>=((prefs.quality||'balanced')==='high'?0.9:0.65)};},[imageQuality,prefs.quality]);
- useEffect(()=>{setImageQuality(null);},[index,view]);
  useEffect(()=>{localStorage.setItem('artframe:prefs',JSON.stringify(prefs));},[prefs]);
  useEffect(()=>{localStorage.setItem('artframe:favorites',JSON.stringify(favorites));},[favorites]);
  const availableCategories=useMemo(()=>prefs.categories,[prefs.categories]);
@@ -56,6 +54,7 @@ export default function App(){
  },[source,category,artist,browseMode,prefs.sources,prefs.shuffle]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
  const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
+ useEffect(()=>{if(view!=='player'||!showOverlay)return;const timer=window.setTimeout(()=>setShowOverlay(false),4000);return()=>window.clearTimeout(timer);},[view,showOverlay,index]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
  const back=useCallback(()=>{if(view!=='gallery'){setView('gallery');setPlaying(false);}else{gridRef.current?.focus();}},[view]);
  useEffect(()=>{
@@ -71,7 +70,7 @@ export default function App(){
   window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
  },[view,back,next]);
  useEffect(()=>{if(view!=='player'||!playing||artworks.length<2)return;const t=window.setInterval(()=>next(1),prefs.interval*1000);return()=>clearInterval(t);},[view,playing,artworks.length,prefs.interval,next]);
- const start=(i:number)=>{setImageQuality(null);setIndex(i);setPlaying(true);setShowOverlay(true);setView('player');};
+ const start=(i:number)=>{setIndex(i);setPlaying(true);setShowOverlay(true);setView('player');};
  const changePrefs=(patch:Partial<Preferences>)=>setPrefs(p=>({...p,...patch}));
  const onGridKey=(e:React.KeyboardEvent<HTMLDivElement>)=>{
   const cards=Array.from(gridRef.current?.querySelectorAll<HTMLButtonElement>('.art-card')||[]);
@@ -94,12 +93,12 @@ export default function App(){
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
-  {view==='player'&&selected&&<div className="player" onMouseMove={()=>setShowOverlay(true)}>
+  {view==='player'&&selected&&<div className="player" onMouseMove={()=>{if(!showOverlay)setShowOverlay(true);}} onClick={e=>{if(e.target===e.currentTarget)setShowOverlay(true);}}>
    {<div className="art-backdrop" style={{backgroundImage:`url("${selected.thumbnailUrl.replace(/"/g,'%22')}")`}} aria-hidden="true"/>}
-   <img key={selected.id} className="full-art frame" src={selected.imageUrl} alt={selected.title} onLoad={e=>{const el=e.currentTarget;setImageQuality({width:el.naturalWidth,height:el.naturalHeight,fallback:el.dataset.fallback==='1'});}} onError={e=>{const el=e.currentTarget;if(el.dataset.fallback!=='1'&&selected.thumbnailUrl!==selected.imageUrl){el.dataset.fallback='1';el.src=selected.thumbnailUrl;}else setImageQuality({width:1,height:1,fallback:true});}}/>
+   <img key={selected.id} className="full-art frame" src={selected.imageUrl} alt={selected.title} onError={e=>{const el=e.currentTarget;if(el.dataset.fallback!=='1'&&selected.thumbnailUrl!==selected.imageUrl){el.dataset.fallback='1';el.src=selected.thumbnailUrl;}}}/>
    {showOverlay&&<><div className="player-top"><button onClick={back} className="round" aria-label="Galeriye dön"><ArrowLeft/></button><span>{index+1} / {artworks.length}</span><button onClick={()=>toggleFavorite(selected.id)} className={`round ${favorites.includes(selected.id)?'fav':''}`} aria-label="Favori"><Heart fill={favorites.includes(selected.id)?'currentColor':'none'}/></button></div>
-   <div className="player-bottom"><div className="art-description">{imageQuality&&qualityInfo&&<p className={`quality-status ${qualityInfo.acceptable&&!imageQuality.fallback?'quality-ok':'quality-low'}`}>{imageQuality.width>1?`${imageQuality.width} × ${imageQuality.height} px`:'Görsel yüklenemedi'}{imageQuality.fallback?' · Önizleme kullanılıyor':qualityInfo.acceptable?' · Çözünürlük yeterli':' · Ekranda büyütülüyor, kalite düşebilir'}</p>}{prefs.showInfo&&<><h2>{selected.title}</h2><p>{selected.artist||sourceNames[selected.source]} {selected.year?`· ${selected.year}`:''}</p><small>{selected.license} · <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Kaynak sayfası</a></small></>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
-   <button className="overlay-toggle" onClick={()=>setShowOverlay(v=>!v)} aria-label="Bilgileri gizle/göster"/>
+   <div className="player-bottom"><div className="art-description">{prefs.showInfo&&<div className="art-meta-line"><strong title={selected.title}>{selected.title}</strong><span className="meta-dot">·</span><span title={selected.artist||sourceNames[selected.source]}>{selected.artist||sourceNames[selected.source]}</span>{selected.year&&<><span className="meta-dot">·</span><span>{selected.year}</span></>}</div>}</div><div className="player-controls"><button className="round" onClick={()=>next(-1)} aria-label="Önceki"><ChevronLeft/></button><button className="round large" onClick={()=>setPlaying(v=>!v)} aria-label={playing?'Duraklat':'Oynat'}>{playing?<Pause/>:<Play/>}</button><button className="round" onClick={()=>next(1)} aria-label="Sonraki"><ChevronRight/></button></div></div></>}
+
   </div>}
   {view==='settings'&&<div className="settings-page"><header className="topbar"><button className="back-btn" onClick={back}><ArrowLeft size={19}/> Galeriye dön</button><h2>Ayarlar</h2></header><div className="settings-content"><h1>ArtFrame ayarları</h1><p className="muted">Tercihler bu cihazın yerel depolamasına kaydedilir.</p><h3>Görsel kaynakları</h3><div className="checks">{allSources.map(s=><label key={s}><input type="checkbox" checked={prefs.sources.includes(s)} disabled={prefs.sources.length===1&&prefs.sources.includes(s)} onChange={e=>changePrefs({sources:e.target.checked?[...prefs.sources,s]:prefs.sources.filter(v=>v!==s)})}/>{sourceNames[s]}</label>)}</div><h3>Kategoriler</h3><div className="checks two">{categories.map(c=><label key={c}><input type="checkbox" checked={prefs.categories.includes(c)} disabled={prefs.categories.length===1&&prefs.categories.includes(c)} onChange={e=>changePrefs({categories:e.target.checked?[...prefs.categories,c]:prefs.categories.filter(v=>v!==c)})}/>{c}</label>)}</div><h3>Sanat modu</h3><div className="setting-row"><label htmlFor="quality">Görüntü kalitesi tercihi</label><select id="quality" value={prefs.quality||'balanced'} onChange={e=>changePrefs({quality:e.target.value as Preferences['quality']})}><option value="balanced">Dengeli (önerilen)</option><option value="high">Yüksek kalite</option><option value="all">Tüm eserler</option></select></div><p className="muted">Görüntünün gerçek piksel boyutu sanat modunda kontrol edilir. Düşük çözünürlüklü eserler gizlenmez; kalite bilgisi gösterilir.</p><div className="setting-row"><label htmlFor="interval">Görsel değiştirme süresi</label><select id="interval" value={prefs.interval} onChange={e=>changePrefs({interval:Number(e.target.value)})}>{[30,60,300,600,900,1800,3600].map(n=><option key={n} value={n}>{n<60?`${n} saniye`:`${n/60} dakika`}</option>)}</select></div><div className="checks"><label><input type="checkbox" checked={prefs.showInfo} onChange={e=>changePrefs({showInfo:e.target.checked})}/>Eser bilgilerini göster</label><label><input type="checkbox" checked={prefs.shuffle} onChange={e=>changePrefs({shuffle:e.target.checked})}/><Shuffle size={15}/> Karışık sıralama</label></div><p className="note">TV genelinde otomatik ekran koruyucu başlatma henüz uygulanmadı. Bu özellik için Tizen sistem yetkileri ayrıca araştırılacak.</p></div></div>}
  </main>;
