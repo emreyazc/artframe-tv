@@ -36,7 +36,8 @@ export const loadArtistArtworks=async(artist:string,sources:Source[],signal?:Abo
 const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
 const clevelandBase=import.meta.env.DEV?'/api/cleveland':'https://openaccess-api.clevelandart.org';
 const rijksBase=import.meta.env.DEV?'/api/rijks':'https://data.rijksmuseum.nl';
-const openverseBase=import.meta.env.DEV?'/api/openverse':'https://api.openverse.org';
+// Openverse anonymous requests may be blocked when routed through a server/proxy IP.
+const openverseBase='https://api.openverse.org';
 const nasaBase=import.meta.env.DEV?'/api/nasa':'https://images-api.nasa.gov';
 class ApiError extends Error {
   constructor(readonly status:number,readonly endpoint:string){
@@ -62,9 +63,9 @@ const fetchJson = async (url:string, signal?:AbortSignal) => {
 };
 const met = async (category:Category, signal?:AbortSignal, artist?:string):Promise<Artwork[]> => {
  const term=artist||terms[category].met;if(!term)return [];
- const params=new URLSearchParams({hasImages:'true',q:term});
+ const params=new URLSearchParams({hasImages:'true',q:term,offset:'0',limit:artist?'320':'100'});
  if(artist)params.set('artistOrCulture','true');
- const search=await fetchJson(`${metBase}/public/collection/v1/search?${params}`,signal);
+ const search=await fetchJson(`${metBase}/public/collection/v1.1/search?${params}`,signal);
  const ids:number[]=(search.objectIDs||[]).slice(0,artist?320:100);
  const found:Artwork[]=[];
  // Artist searches can include unrelated objects. Scan several batches, with bounded concurrency.
