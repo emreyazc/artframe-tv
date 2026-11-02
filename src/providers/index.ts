@@ -2,19 +2,19 @@
 import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
-const terms: Record<Category,{met?:string;cleveland?:string;rijks?:string}> = {
- 'Mimari':{met:'architecture',cleveland:'architecture',rijks:'architecture'},
- 'Doğa ve manzara':{met:'landscape',cleveland:'landscape',rijks:'landscape'},
- 'Klasik resim':{met:'painting',cleveland:'painting',rijks:'painting'},
- 'Empresyonizm':{met:'impressionism',cleveland:'impressionism',rijks:'impressionism'},
- 'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy'},
- 'Modern sanat':{met:'modern art',cleveland:'modern art',rijks:'modern'},
- 'Şehirler':{met:'city',cleveland:'cityscape',rijks:'city'},
- 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints',rijks:'Japanese'},
- 'Hayvanlar':{met:'animals',cleveland:'animals',rijks:'animals'},
- 'Fotoğrafçılık':{met:'photograph',cleveland:'photography',rijks:'photograph'},
- 'Soyut sanat':{met:'abstract',cleveland:'abstract',rijks:'abstract'},
- 'Tarih':{met:'historical',cleveland:'history',rijks:'history'}
+const terms: Record<Category,{met?:string;cleveland?:string;rijks?:string;openverse?:string;nasa?:string}> = {
+ 'Mimari':{met:'architecture',cleveland:'architecture',rijks:'architecture',openverse:'architecture buildings'},
+ 'Doğa ve manzara':{met:'landscape',cleveland:'landscape',rijks:'landscape',openverse:'nature landscape'},
+ 'Klasik resim':{met:'painting',cleveland:'painting',rijks:'painting',openverse:'classical painting'},
+ 'Empresyonizm':{met:'impressionism',cleveland:'impressionism',rijks:'impressionism',openverse:'impressionism painting'},
+ 'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy',openverse:'space astronomy',nasa:'nebula galaxy'},
+ 'Modern sanat':{met:'modern art',cleveland:'modern art',rijks:'modern',openverse:'modern art'},
+ 'Şehirler':{met:'city',cleveland:'cityscape',rijks:'city',openverse:'city architecture'},
+ 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints',rijks:'Japanese',openverse:'japanese art'},
+ 'Hayvanlar':{met:'animals',cleveland:'animals',rijks:'animals',openverse:'wildlife photography'},
+ 'Fotoğrafçılık':{met:'photograph',cleveland:'photography',rijks:'photograph',openverse:'photography'},
+ 'Soyut sanat':{met:'abstract',cleveland:'abstract',rijks:'abstract',openverse:'abstract art'},
+ 'Tarih':{met:'historical',cleveland:'history',rijks:'history',openverse:'historical architecture'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
 // The Vite proxy is only available while running npm run dev.
@@ -22,6 +22,8 @@ export const supported = (source:Source, category:Category) => Boolean(terms[cat
 const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
 const clevelandBase=import.meta.env.DEV?'/api/cleveland':'https://openaccess-api.clevelandart.org';
 const rijksBase=import.meta.env.DEV?'/api/rijks':'https://data.rijksmuseum.nl';
+const openverseBase=import.meta.env.DEV?'/api/openverse':'https://api.openverse.org';
+const nasaBase=import.meta.env.DEV?'/api/nasa':'https://images-api.nasa.gov';
 class ApiError extends Error {
   constructor(readonly status:number,readonly endpoint:string){
     super(`HTTP ${status} (${endpoint})`);
@@ -127,9 +129,37 @@ const rijks = async (category:Category,signal?:AbortSignal):Promise<Artwork[]> =
   }
   return items;
 };
+
+const openverse=async(category:Category,signal?:AbortSignal):Promise<Artwork[]>=>{
+ const term=terms[category].openverse;if(!term)return [];
+ const params=new URLSearchParams({q:term,page_size:'20',page:'1',license:'cc0,pdm',excluded_source:'wikimedia',mature:'false'});
+ const json=await fetchJson(`${openverseBase}/v1/images/?${params}`,signal);
+ return (json.results||[]).flatMap((o:any):Artwork[]=>{
+  if(!['cc0','pdm'].includes(String(o.license||'').toLowerCase())||/wikimedia/i.test(String(o.source||'')+' '+String(o.provider||'')))return [];
+  if(!/^https:\/\//.test(String(o.url||''))||!/^https:\/\//.test(String(o.thumbnail||o.url||'')))return [];
+  return [{id:`openverse:${o.id}`,source:'openverse',title:o.title||'İsimsiz görsel',
+   artist:o.creator||undefined,category,imageUrl:o.url,thumbnailUrl:o.thumbnail||o.url,
+   license:String(o.license).toUpperCase(),attribution:o.attribution||undefined,
+   sourceUrl:o.foreign_landing_url||o.detail_url||`https://openverse.org/image/${o.id}`,
+   width:Number(o.width)||undefined,height:Number(o.height)||undefined}];
+ });
+};
+const nasa=async(category:Category,signal?:AbortSignal):Promise<Artwork[]>=>{
+ const term=terms[category].nasa;if(!term)return [];
+ const params=new URLSearchParams({q:term,media_type:'image',page_size:'100',page:'1'});
+ const json=await fetchJson(`${nasaBase}/search?${params}`,signal);
+ return (json.collection?.items||[]).flatMap((o:any):Artwork[]=>{
+  const info=o.data?.[0];const image=o.links?.find((l:any)=>l.rel==='preview'&&/^https:\/\//.test(String(l.href||'')))?.href;
+  if(!info||!image||!info.nasa_id)return [];
+  return [{id:`nasa:${info.nasa_id}`,source:'nasa',title:info.title||'NASA görseli',
+   artist:info.photographer||info.secondary_creator||'NASA',year:info.date_created?.slice(0,4),
+   category,imageUrl:image,thumbnailUrl:image,license:'NASA — kullanım kurallarını kontrol edin',
+   sourceUrl:`https://images.nasa.gov/details/${encodeURIComponent(info.nasa_id)}`}];
+ });
+};
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
-    const active:Source[]=(['met','cleveland','rijks'] as Source[]).filter(s=>supported(s,category));
+    const active:Source[]=(['met','cleveland','rijks','openverse','nasa'] as Source[]).filter(s=>supported(s,category));
     const results=await Promise.allSettled(active.map(s=>loadArtworks(s,category,signal)));
     if(signal?.aborted) return [];
     const successful=results.filter((r):r is PromiseFulfilledResult<Artwork[]>=>r.status==='fulfilled');
@@ -142,5 +172,7 @@ export const loadArtworks = async (source:SourceSelection,category:Category,sign
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
   if(source==='cleveland')return cleveland(category,signal);
-  return rijks(category,signal);
+  if(source==='rijks')return rijks(category,signal);
+  if(source==='openverse')return openverse(category,signal);
+  return nasa(category,signal);
 };
