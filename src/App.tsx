@@ -37,6 +37,7 @@ export default function App(){
  const [artworks,setArtworks]=useState<Artwork[]>([]);
  const [loading,setLoading]=useState(false);
  const [error,setError]=useState('');
+ const [warning,setWarning]=useState('');
  const [view,setView]=useState<'gallery'|'player'|'settings'>('gallery');
  const [index,setIndex]=useState(0);
  const [playing,setPlaying]=useState(true);
@@ -51,8 +52,21 @@ export default function App(){
  useEffect(()=>{if(!availableCategories.includes(category)&&availableCategories.length)setCategory(availableCategories[0]);},[availableCategories,category]);
  const refresh=useCallback(async()=>{
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
-  setLoading(true);setError('');setArtworks([]);setIndex(0);
-  try{const data=source==='all'?(await Promise.allSettled(prefs.sources.map(s=>loadArtworks(s,category,controller.signal)))).flatMap(result=>result.status==='fulfilled'?result.value:[]):await loadArtworks(source,category,controller.signal);const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);}
+  setLoading(true);setError('');setWarning('');setArtworks([]);setIndex(0);
+  try{
+   let data:Artwork[];
+   if(source==='all'){
+     const results=await Promise.allSettled(prefs.sources.map(s=>loadArtworks(s,category,controller.signal)));
+     const failures=results.flatMap((result,i)=>result.status==='rejected'?[sourceNames[prefs.sources[i]]]:[]);
+     data=results.flatMap(result=>result.status==='fulfilled'?result.value:[]);
+     if(failures.length===results.length)throw new Error(`Tüm kaynaklara erişilemedi: ${failures.join(', ')}`);
+     if(!controller.signal.aborted&&failures.length)setWarning(`Bazı kaynaklara erişilemedi: ${failures.join(', ')}. Diğer kaynakların eserleri gösteriliyor.`);
+   }else{
+     data=await loadArtworks(source,category,controller.signal);
+   }
+   const filtered=(prefs.preferWide??true)?await filterWide(data,controller.signal):data;
+   if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(filtered):filtered);
+  }
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
  },[source,category,prefs.sources,prefs.shuffle,prefs.preferWide]);
@@ -89,6 +103,7 @@ export default function App(){
    <section className="intro"><div><p className="eyebrow">ÜCRETSİZ SANAT KOLEKSİYONLARI</p><h1>Bir ekran.<br/><em>Binlerce hikâye.</em></h1><p>Kaynağını ve koleksiyonunu seç, sanat eserlerini televizyonunda keşfet.</p></div><div className="intro-art" aria-hidden="true"><span>ART<br/>FRAME</span></div></section>
    <section className="filters"><div><label htmlFor="source">KAYNAK</label><select id="source" value={source} onChange={e=>setSource(e.target.value as SourceSelection)}><option value="all">Tüm kaynaklar</option>{allSources.filter(s=>prefs.sources.includes(s)).map(s=><option value={s} key={s}>{sourceNames[s]}</option>)}</select></div><div><label htmlFor="category">KATEGORİ</label><select id="category" value={category} onChange={e=>setCategory(e.target.value as Category)}>{availableCategories.map(c=><option key={c}>{c}</option>)}</select></div><button className="refresh" onClick={()=>void refresh()}><RefreshCw size={17}/> Yenile</button></section>
    <div className="section-heading"><div><h2>{category}</h2><p>{sourceNames[source]} · {loading?'Yükleniyor...':`${artworks.length} eser`}</p></div>{artworks.length>0&&<button className="primary" onClick={()=>start(0)}><Play size={18} fill="currentColor"/> Sanat modunu başlat</button>}</div>
+   {warning&&!error&&<div className="message" role="status">{warning}</div>}
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
    {!loading&&!error&&!artworks.length&&<div className="message">Bu aramada 16:9'a yakın uygun eser bulunamadı. Başka bir kategori deneyin veya 16:9 filtresini kapatın.</div>}
    {loading&&<div className="message">Koleksiyon yükleniyor ve görsellerin ekran oranları kontrol ediliyor…</div>}
