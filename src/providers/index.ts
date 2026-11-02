@@ -1,4 +1,4 @@
-import type { Artwork, Category, Source } from '../types';
+import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
 const terms: Record<Category,{met?:string;chicago?:string;commons?:string}> = {
@@ -24,7 +24,7 @@ const fetchJson = async (url:string, signal?:AbortSignal) => {
 const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
   const term=terms[category].met; if(!term) return [];
   // The Met's public Collection API; keep the adapter isolated for future API changes.
-  const search=await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/search?hasImages=true&q=${encodeURIComponent(term)}`,signal);
+  const search=await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1.1/search?hasImages=true&q=${encodeURIComponent(term)}&offset=0&limit=100`,signal);
   const ids:number[]=(search.objectIDs||[]).slice(0,28);
   const objects=await Promise.allSettled(ids.map(id=>fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,signal)));
   return objects.flatMap((result):Artwork[]=>{
@@ -59,7 +59,18 @@ const commons = async (category:Category, signal?:AbortSignal):Promise<Artwork[]
     return [{id:`commons:${p.pageid}`,source:'commons',title,artist:clean(meta.Artist?.value||'')||undefined,category,imageUrl:i.url,thumbnailUrl:i.thumburl,license,attribution:clean(meta.Attribution?.value||'')||undefined,sourceUrl:i.descriptionurl||`https://commons.wikimedia.org/wiki/${encodeURIComponent(p.title)}`}];
   });
 };
-export const loadArtworks = async (source:Source,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
+export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
+  if(source==='all'){
+    const active:Source[]=(['met','chicago','commons'] as Source[]).filter(s=>supported(s,category));
+    const results=await Promise.allSettled(active.map(s=>loadArtworks(s,category,signal)));
+    if(signal?.aborted) return [];
+    const successful=results.filter((r):r is PromiseFulfilledResult<Artwork[]>=>r.status==='fulfilled');
+    if(!successful.length){
+      const first=results.find((r):r is PromiseRejectedResult=>r.status==='rejected');
+      throw first?.reason||new Error('Kaynaklardan eser alınamadı');
+    }
+    return successful.flatMap(r=>r.value);
+  }
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
   if(source==='chicago') return chicago(category,signal);
