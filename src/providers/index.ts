@@ -141,7 +141,6 @@ export const loadArtworks = async (source:SourceSelection,category:Category,sign
   }
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
-  if(source==='cleveland') return cleveland(category,signal);
   if(source==='cleveland')return cleveland(category,signal);
   return rijks(category,signal);
 };
