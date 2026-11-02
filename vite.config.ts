@@ -6,6 +6,18 @@ export default defineConfig({
   base: './',
   server: {
     proxy: {
+      '/api/openverse': {
+        target: 'https://api.openverse.org',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/openverse/, ''),
+      },
+      '/api/nasa': {
+        target: 'https://images-api.nasa.gov',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/nasa/, ''),
+      },
       '/api/met': {
         target: 'https://collectionapi.metmuseum.org',
         changeOrigin: true,
