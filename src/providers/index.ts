@@ -2,25 +2,25 @@
 import type { Artwork, Category, Source, SourceSelection } from '../types';
 
 // Query mapping is deliberately explicit: not every collection supports every subject.
-const terms: Record<Category,{met?:string;chicago?:string;commons?:string}> = {
- 'Mimari':{met:'architecture',chicago:'architecture',commons:'architecture buildings'},
- 'Doğa ve manzara':{met:'landscape',chicago:'landscape',commons:'landscape nature'},
- 'Klasik resim':{met:'painting',chicago:'painting',commons:'classical painting'},
- 'Empresyonizm':{met:'impressionism',chicago:'impressionism',commons:'impressionist painting'},
- 'Uzay ve astronomi':{met:'astronomy',chicago:'astronomy',commons:'astronomy nebula'},
- 'Modern sanat':{met:'modern art',chicago:'modern art',commons:'modern art'},
- 'Şehirler':{met:'city',chicago:'cityscape',commons:'city skyline'},
- 'Japon sanatı':{met:'Japanese art',chicago:'Japanese prints',commons:'Japanese art'},
- 'Hayvanlar':{met:'animals',chicago:'animals',commons:'wildlife animals'},
- 'Fotoğrafçılık':{met:'photograph',chicago:'photography',commons:'photography'},
- 'Soyut sanat':{met:'abstract',chicago:'abstract',commons:'abstract art'},
- 'Tarih':{met:'historical',chicago:'history',commons:'historic monuments'}
+const terms: Record<Category,{met?:string;cleveland?:string;commons?:string}> = {
+ 'Mimari':{met:'architecture',cleveland:'architecture',commons:'architecture buildings'},
+ 'Doğa ve manzara':{met:'landscape',cleveland:'landscape',commons:'landscape nature'},
+ 'Klasik resim':{met:'painting',cleveland:'painting',commons:'classical painting'},
+ 'Empresyonizm':{met:'impressionism',cleveland:'impressionism',commons:'impressionist painting'},
+ 'Uzay ve astronomi':{met:'astronomy',cleveland:'astronomy',commons:'astronomy nebula'},
+ 'Modern sanat':{met:'modern art',cleveland:'modern art',commons:'modern art'},
+ 'Şehirler':{met:'city',cleveland:'cityscape',commons:'city skyline'},
+ 'Japon sanatı':{met:'Japanese art',cleveland:'Japanese prints',commons:'Japanese art'},
+ 'Hayvanlar':{met:'animals',cleveland:'animals',commons:'wildlife animals'},
+ 'Fotoğrafçılık':{met:'photograph',cleveland:'photography',commons:'photography'},
+ 'Soyut sanat':{met:'abstract',cleveland:'abstract',commons:'abstract art'},
+ 'Tarih':{met:'historical',cleveland:'history',commons:'historic monuments'}
 };
 export const supported = (source:Source, category:Category) => Boolean(terms[category][source]);
 // The Vite proxy is only available while running npm run dev.
 // Production/Tizen keeps the original public endpoints until a TV-safe solution is validated.
 const metBase=import.meta.env.DEV?'/api/met':'https://collectionapi.metmuseum.org';
-const chicagoBase=import.meta.env.DEV?'/api/chicago':'https://api.artic.edu';
+const clevelandBase=import.meta.env.DEV?'/api/cleveland':'https://openaccess-api.clevelandart.org';
 class ApiError extends Error {
   constructor(readonly status:number,readonly endpoint:string){
     super(`HTTP ${status} (${endpoint})`);
@@ -62,23 +62,22 @@ const met = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> =>
     return [{id:`met:${o.objectID}`,source:'met',title:o.title||'İsimsiz eser',artist:o.artistDisplayName||undefined,year:o.objectDate||undefined,category,imageUrl:o.primaryImage,thumbnailUrl:o.primaryImageSmall,license:'Public Domain',sourceUrl:o.objectURL||`https://www.metmuseum.org/art/collection/search/${o.objectID}`,width:Number(o.primaryImageWidth)||undefined,height:Number(o.primaryImageHeight)||undefined}];
   });
 };
-const chicago = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
-  const term=terms[category].chicago; if(!term) return [];
-  const params=new URLSearchParams({q:term,limit:'50',fields:'id,title,artist_display,date_display,image_id,is_public_domain,thumbnail'});
-  // Public-domain filtering is also enforced locally.
-  let json:any;
- try{json=await fetchJson(`${chicagoBase}/api/v1/artworks/search?${params.toString()}`,signal);}
- catch(e){
-   if(signal?.aborted)throw e;
-   if(e instanceof ApiError){
-     if(e.status===403)throw new Error('AIC HTTP 403: Sunucu isteği reddetti. Bir süre sonra yeniden deneyin.');
-     if(e.status===429)throw new Error('AIC HTTP 429: İstek sınırına ulaşıldı. Biraz bekleyin.');
-     throw new Error(`AIC ${e.message}`);
-   }
-   throw new Error(`AIC bağlantı hatası: ${e instanceof Error?e.message:String(e)}`);
- }
-  const base=(json.config?.iiif_url as string)||'https://www.artic.edu/iiif/2';
-  return (json.data||[]).filter((o:any)=>o.is_public_domain&&o.image_id).map((o:any):Artwork=>({id:`chicago:${o.id}`,source:'chicago',title:o.title||'İsimsiz eser',artist:o.artist_display||undefined,year:o.date_display||undefined,category,imageUrl:`${base}/${o.image_id}/full/1680,/0/default.jpg`,thumbnailUrl:`${base}/${o.image_id}/full/480,/0/default.jpg`,license:'CC0 / Public Domain',sourceUrl:`https://www.artic.edu/artworks/${o.id}`,width:Number(o.thumbnail?.width)||undefined,height:Number(o.thumbnail?.height)||undefined}));
+const cleveland = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
+  const term=terms[category].cleveland;if(!term)return [];
+  const params=new URLSearchParams({q:term,has_image:'1',limit:'100',skip:'0'});
+  // Cleveland's CC0 status is checked per artwork; copyrighted images are excluded.
+  const json=await fetchJson(`${clevelandBase}/api/artworks/?${params}`,signal);
+  return (json.data||[]).flatMap((o:any):Artwork[]=>{
+    if(String(o.share_license_status).toUpperCase()!=='CC0'||!o.images?.web?.url)return [];
+    const web=o.images.web;
+    const print=o.images.print;
+    return [{id:`cleveland:${o.id}`,source:'cleveland',title:o.title||'İsimsiz eser',
+      artist:o.creators?.map((c:any)=>c.description||c.name).filter(Boolean).join(', ')||undefined,
+      year:o.creation_date||undefined,category,
+      imageUrl:print?.url||web.url,thumbnailUrl:web.url,license:'CC0 / Public Domain',
+      sourceUrl:o.url||`https://www.clevelandart.org/art/${o.accession_number||o.id}`,
+      width:Number(web.width)||undefined,height:Number(web.height)||undefined}];
+  });
 };
 const commons = async (category:Category, signal?:AbortSignal):Promise<Artwork[]> => {
   const term=terms[category].commons; if(!term) return [];
@@ -105,7 +104,7 @@ const commons = async (category:Category, signal?:AbortSignal):Promise<Artwork[]
 };
 export const loadArtworks = async (source:SourceSelection,category:Category,signal?:AbortSignal):Promise<Artwork[]> => {
   if(source==='all'){
-    const active:Source[]=(['met','chicago','commons'] as Source[]).filter(s=>supported(s,category));
+    const active:Source[]=(['met','cleveland','commons'] as Source[]).filter(s=>supported(s,category));
     const results=await Promise.allSettled(active.map(s=>loadArtworks(s,category,signal)));
     if(signal?.aborted) return [];
     const successful=results.filter((r):r is PromiseFulfilledResult<Artwork[]>=>r.status==='fulfilled');
@@ -117,6 +116,6 @@ export const loadArtworks = async (source:SourceSelection,category:Category,sign
   }
   if(!supported(source,category)) return [];
   if(source==='met') return met(category,signal);
-  if(source==='chicago') return chicago(category,signal);
+  if(source==='cleveland') return cleveland(category,signal);
   return commons(category,signal);
 };
