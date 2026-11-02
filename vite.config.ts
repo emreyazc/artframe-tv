@@ -12,11 +12,11 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/api\/met/, ''),
       },
-      '/api/chicago': {
-        target: 'https://api.artic.edu',
+      '/api/cleveland': {
+        target: 'https://openaccess-api.clevelandart.org',
         changeOrigin: true,
         secure: true,
-        rewrite: (path) => path.replace(/^\/api\/chicago/, ''),
+        rewrite: (path) => path.replace(/^\/api\/cleveland/, ''),
       },
     },
   },
