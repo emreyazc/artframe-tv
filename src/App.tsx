@@ -21,48 +21,33 @@ export default function App(){
  const [playing,setPlaying]=useState(true);
  const [showOverlay,setShowOverlay]=useState(true);
  const [prepared,setPrepared]=useState<Record<string,string>>({});
- const [preparing,setPreparing]=useState(false);
  const preparedRef=useRef<Record<string,string>>({});
- const rejectedRef=useRef(new Set<string>());
- const navigationRef=useRef(0);
  const gridRef=useRef<HTMLDivElement>(null);
  const abort=useRef<AbortController|null>(null);
  const selected=artworks[index];
- const validate=useCallback(async(art:Artwork):Promise<string|null>=>{
+ const validate=useCallback(async(art:Artwork,signal?:AbortSignal):Promise<string|null>=>{
   if(preparedRef.current[art.id])return preparedRef.current[art.id];
-  if(rejectedRef.current.has(art.id))return null;
   try{
-   const urls=await resolveArtworkImages(art);
+   const urls=await resolveArtworkImages(art,signal);
    for(const url of urls){
+    if(signal?.aborted)return null;
     const image=await new Promise<HTMLImageElement|null>(resolve=>{
-     const img=new window.Image();img.onload=()=>resolve(img);img.onerror=()=>resolve(null);img.src=url;
+     const img=new window.Image();let done=false;
+     const finish=(value:HTMLImageElement|null)=>{if(done)return;done=true;clearTimeout(timer);resolve(value);};
+     const timer=window.setTimeout(()=>finish(null),12000);
+     img.onload=()=>finish(img);img.onerror=()=>finish(null);img.src=url;
     });
     if(!image)continue;
     // Require at least Full HD-class source pixels before a slide is eligible.
     if(Math.max(image.naturalWidth,image.naturalHeight)<1900||image.naturalWidth*image.naturalHeight<1500000)continue;
+    if(signal?.aborted)return null;
     preparedRef.current[art.id]=url;
     setPrepared(current=>({...current,[art.id]:url}));
     return url;
    }
   }catch{ /* Unavailable or undersized images are excluded from playback. */ }
-  rejectedRef.current.add(art.id);
   return null;
  },[]);
- const goToEligible=useCallback(async(startIndex:number,step:number,enter:boolean)=>{
-  const request=++navigationRef.current;
-  setPreparing(true);
-  for(let count=0;count<artworks.length;count++){
-   const i=(startIndex+count*step+artworks.length*2)%artworks.length;
-   const url=await validate(artworks[i]);
-   if(request!==navigationRef.current)return;
-   if(url){
-    setIndex(i);setPreparing(false);
-    if(enter){setPlaying(true);setShowOverlay(true);setView('player');}
-    return;
-   }
-  }
-  if(request===navigationRef.current){setPreparing(false);setWarning('Sanat modu için yeterli çözünürlükte görsel bulunamadı.');}
- },[artworks,validate]);
  useEffect(()=>{localStorage.setItem('artframe:prefs',JSON.stringify(prefs));},[prefs]);
  useEffect(()=>{localStorage.setItem('artframe:favorites',JSON.stringify(favorites));},[favorites]);
  const availableCategories=useMemo(()=>prefs.categories,[prefs.categories]);
@@ -70,7 +55,7 @@ export default function App(){
  useEffect(()=>{if(!availableCategories.includes(category)&&availableCategories.length)setCategory(availableCategories[0]);},[availableCategories,category]);
  const refresh=useCallback(async()=>{
   abort.current?.abort();const controller=new AbortController();abort.current=controller;
-  navigationRef.current++;preparedRef.current={};rejectedRef.current.clear();setPrepared({});setPreparing(false);
+  preparedRef.current={};setPrepared({});
   setLoading(true);setError('');setWarning('');setArtworks([]);setIndex(0);
   try{
    let data:Artwork[];
@@ -87,16 +72,32 @@ export default function App(){
    }else{
      data=await loadArtworks(source,category,controller.signal);
    }
-   if(!controller.signal.aborted)setArtworks(prefs.shuffle?shuffleArray(data):data);
+   if(controller.signal.aborted)return;
+   const candidates=prefs.shuffle?shuffleArray(data):data;
+   let cursor=0;
+   const accepted=new Array<Artwork|null>(candidates.length).fill(null);
+   const worker=async()=>{
+    while(cursor<candidates.length&&!controller.signal.aborted){
+     const position=cursor++;
+     const item=candidates[position];
+     const url=await validate(item,controller.signal);
+     if(controller.signal.aborted)return;
+     if(url){
+      accepted[position]=item;
+      setArtworks(accepted.filter((a):a is Artwork=>a!==null));
+     }
+    }
+   };
+   await Promise.all(Array.from({length:Math.min(3,candidates.length)},()=>worker()));
   }
   catch(e){if(!controller.signal.aborted)setError(`Görseller alınamadı: ${e instanceof Error?e.message:String(e)}. TV ağ bağlantısını veya API erişimini kontrol edin.`);}
   finally{if(!controller.signal.aborted)setLoading(false);}
- },[source,category,artist,browseMode,prefs.sources,prefs.shuffle]);
+ },[source,category,artist,browseMode,prefs.sources,prefs.shuffle,validate]);
  useEffect(()=>{void refresh();return()=>abort.current?.abort();},[refresh]);
- const next=useCallback((delta:number)=>{if(artworks.length)void goToEligible((index+delta+artworks.length)%artworks.length,delta>=0?1:-1,false);},[artworks.length,index,goToEligible]);
+ const next=useCallback((delta:number)=>setIndex(i=>artworks.length?(i+delta+artworks.length)%artworks.length:0),[artworks.length]);
  useEffect(()=>{if(view!=='player'||!showOverlay)return;const timer=window.setTimeout(()=>setShowOverlay(false),4000);return()=>window.clearTimeout(timer);},[view,showOverlay,index]);
  const toggleFavorite=useCallback((id:string)=>setFavorites(items=>items.includes(id)?items.filter(x=>x!==id):[...items,id]),[]);
- const back=useCallback(()=>{navigationRef.current++;setPreparing(false);if(view!=='gallery'){setView('gallery');setPlaying(false);}else{gridRef.current?.focus();}},[view]);
+ const back=useCallback(()=>{if(view!=='gallery'){setView('gallery');setPlaying(false);}else{gridRef.current?.focus();}},[view]);
  useEffect(()=>{
   const handler=(e:KeyboardEvent)=>{
    if(e.key==='Escape'||e.key==='Backspace'||e.key==='BrowserBack'){e.preventDefault();back();return;}
@@ -110,7 +111,7 @@ export default function App(){
   window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);
  },[view,back,next]);
  useEffect(()=>{if(view!=='player'||!playing||artworks.length<2)return;const t=window.setInterval(()=>next(1),prefs.interval*1000);return()=>clearInterval(t);},[view,playing,artworks.length,prefs.interval,next]);
- const start=(i:number)=>{void goToEligible(i,1,true);};
+ const start=(i:number)=>{if(!preparedRef.current[artworks[i]?.id])return;setIndex(i);setPlaying(true);setShowOverlay(true);setView('player');};
  const changePrefs=(patch:Partial<Preferences>)=>setPrefs(p=>({...p,...patch}));
  const onGridKey=(e:React.KeyboardEvent<HTMLDivElement>)=>{
   const cards=Array.from(gridRef.current?.querySelectorAll<HTMLButtonElement>('.art-card')||[]);
@@ -129,7 +130,7 @@ export default function App(){
    {warning&&!error&&<div className="message" role="status">{warning}</div>}
    {error&&<div className="message error" role="alert">{error}<button onClick={()=>void refresh()}>Tekrar dene</button></div>}
    {!loading&&!error&&!artworks.length&&<div className="message">{browseMode==='artists'?'Bu sanatçı için açık erişimli eser bulunamadı. Başka bir sanatçı deneyin veya ayarlardan The Met ve Cleveland kaynaklarını etkinleştirin.':'Bu kaynak ve kategoride görüntülenebilir eser bulunamadı. Başka bir kategori veya kaynak deneyin.'}</div>}
-   {loading&&<div className="message">Koleksiyon yükleniyor…</div>}{preparing&&view==='gallery'&&<div className="message" role="status">Sanat modu için yüksek çözünürlüklü görseller kontrol ediliyor…</div>}
+   {loading&&!artworks.length&&<div className="message">Koleksiyon yükleniyor…</div>}
    <div className="art-grid" ref={gridRef} onKeyDown={onGridKey}>{artworks.map((a,i)=><button key={a.id} className="art-card" onClick={()=>start(i)}><div className="thumb"><img src={a.thumbnailUrl} alt={a.title} loading="lazy"/><span className="view-icon"><Maximize size={17}/></span></div><strong>{a.title}</strong><small>{a.artist||sourceNames[a.source]}</small></button>)}</div>
    <footer>ArtFrame TV v0.1 · Açık erişimli koleksiyonlar · Eserlerin lisans bilgileri kendi kaynaklarında doğrulanmalıdır.</footer>
   </>}
