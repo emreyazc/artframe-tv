@@ -30,7 +30,7 @@ const filterWide=async(items:Artwork[],signal:AbortSignal):Promise<Artwork[]>=>{
  return result.filter((a):a is Artwork=>a!==null);
 };
 export default function App(){
- const [prefs,setPrefs]=useState<Preferences>(()=>{const saved=read('artframe:prefs',defaults);return {...defaults,...saved,sources:Array.from(new Set((saved.sources||defaults.sources).map(s=>String(s)==='chicago'?'cleveland':s))).filter((s):s is Source=>allSources.includes(s as Source))};});
+ const [prefs,setPrefs]=useState<Preferences>(()=>{const saved=read('artframe:prefs',defaults);const stored=(saved.sources||defaults.sources).map(s=>String(s)==='chicago'?'cleveland':s);const migrated=localStorage.getItem('artframe:rijks-migrated')==='1'?stored:[...stored,'rijks'];localStorage.setItem('artframe:rijks-migrated','1');return {...defaults,...saved,sources:Array.from(new Set(migrated)).filter((s):s is Source=>allSources.includes(s as Source))};});
  const [favorites,setFavorites]=useState<string[]>(()=>read('artframe:favorites',[]));
  const [source,setSource]=useState<SourceSelection>('all');
  const [category,setCategory]=useState<Category>('Klasik resim');
